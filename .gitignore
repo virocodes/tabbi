@@ -1,0 +1,38 @@
+# Environment files (contain secrets)
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+.wrangler/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Convex
+.convex/
+
+# Claude Code local settings
+.claude/
+
+# Vite temp files
+.vite/
+web-tailwind/

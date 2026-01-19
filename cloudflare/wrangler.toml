@@ -19,7 +19,7 @@ class_name = "SessionAgent"
 # Migrations for Durable Object
 [[migrations]]
 tag = "v1"
-new_classes = ["SessionAgent"]
+new_sqlite_classes = ["SessionAgent"]
 
 # =============================================================================
 # Production Environment
@@ -29,10 +29,9 @@ new_classes = ["SessionAgent"]
 name = "coding-agent-api-production"
 
 [env.production.vars]
-# IMPORTANT: Update these URLs before production deployment
-MODAL_API_URL = "https://YOUR_USERNAME--coding-agent-sandbox"
-CONVEX_SITE_URL = "https://YOUR_PROJECT.convex.site"
-ALLOWED_ORIGINS = "https://your-production-domain.com"
+MODAL_API_URL = "https://dbellan1291--coding-agent-sandbox"
+CONVEX_SITE_URL = "https://cheery-anaconda-510.convex.site"
+ALLOWED_ORIGINS = "https://tabbi.dev,https://www.tabbi.dev"
 # DEV_MODE not set = logging disabled in production
 # MODAL_API_SECRET should be set via wrangler secret put MODAL_API_SECRET
 
@@ -42,4 +41,4 @@ class_name = "SessionAgent"
 
 [[env.production.migrations]]
 tag = "v1"
-new_classes = ["SessionAgent"]
+new_sqlite_classes = ["SessionAgent"]

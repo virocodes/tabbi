@@ -18,5 +18,6 @@
     "noUncheckedSideEffectImports": true,
     "types": ["node"]
   },
-  "include": ["src", "../convex/_generated"]
+  "include": ["src", "../convex/_generated"],
+  "exclude": ["../convex/*.ts"]
 }

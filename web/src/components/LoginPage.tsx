@@ -20,8 +20,8 @@ export function LoginPage() {
     }
   }, [isAuthenticated, isLoading, navigate]);
 
-  // Show skeleton while checking auth OR processing OAuth callback
-  if (isLoading || isOAuthCallback) {
+  // Show skeleton while checking auth OR processing OAuth callback (but not yet authenticated)
+  if (isLoading || (isOAuthCallback && !isAuthenticated)) {
     return (
       <div className="auth-page">
         <div className="auth-content">

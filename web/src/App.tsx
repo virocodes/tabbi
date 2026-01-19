@@ -161,8 +161,8 @@ function AppContent() {
     }
   }, [deleteSession, urlSessionId, navigate]);
 
-  // Show skeleton while auth is initializing OR processing OAuth callback
-  if (isAuthLoading || isOAuthCallback) {
+  // Show skeleton while auth is initializing OR processing OAuth callback (but not yet authenticated)
+  if (isAuthLoading || (isOAuthCallback && !isAuthenticated)) {
     return (
       <div className="app-layout">
         <div className="sidebar skeleton-sidebar">

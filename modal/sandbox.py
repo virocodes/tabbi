@@ -221,7 +221,7 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     ).wait()
     sb.exec(
         "sh", "-c",
-        "cd /workspace && source /root/.opencode-env && opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
+        "cd /workspace && . /root/.opencode-env && opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
     ).wait()
 
     # Give the server time to start
@@ -343,11 +343,11 @@ async def resume_sandbox(snapshot_id: str) -> dict:
     print(f"[resume] Sandbox created with ID: {sb.object_id}")
 
     # Start OpenCode server again using the saved environment
-    # Source the env file that was created during initial sandbox creation
+    # Source the env file that was created during initial sandbox creation (use . for POSIX compat)
     print("[resume] Starting OpenCode server...")
     sb.exec(
         "sh", "-c",
-        "cd /workspace && source /root/.opencode-env 2>/dev/null; opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
+        "cd /workspace && . /root/.opencode-env 2>/dev/null; opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
     ).wait()
 
     # Get tunnel URL

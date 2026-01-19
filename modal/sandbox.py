@@ -152,10 +152,22 @@ async def create_sandbox(repo: str, pat: str) -> dict:
 
     print(f"[4/10] GitHub user: {github_name} <{github_email}>")
 
-    # Configure git with the user's actual identity
+    # Configure git with the user's actual identity (both global and local)
     print("[5/10] Configuring git...")
+    # Set global config (used by any git command)
+    sb.exec("git", "config", "--global", "user.email", github_email).wait()
+    sb.exec("git", "config", "--global", "user.name", github_name).wait()
+    # Also set local config for this repo
     sb.exec("git", "config", "user.email", github_email, workdir="/workspace").wait()
     sb.exec("git", "config", "user.name", github_name, workdir="/workspace").wait()
+
+    # Verify the config was set correctly
+    verify_result = sb.exec("git", "config", "--get", "user.name", workdir="/workspace")
+    verify_result.wait()
+    verify_output = verify_result.stdout.read()
+    if isinstance(verify_output, bytes):
+        verify_output = verify_output.decode("utf-8")
+    print(f"[5/10] Verified git user.name: {verify_output.strip()}")
 
     # Configure credential helper to use the PAT for push operations
     sb.exec(

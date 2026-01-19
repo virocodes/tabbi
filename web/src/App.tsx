@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Routes, Route, useNavigate, useParams, Navigate } from "react-router-dom";
+import { Routes, Route, useNavigate, useParams, Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
 import { useSessions } from "./hooks/useSessions";
 import { useSession } from "./hooks/useSession";
@@ -10,6 +10,10 @@ import { Chat } from "./components/Chat";
 function AppContent() {
   const navigate = useNavigate();
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+
+  // Check if we're in the middle of an OAuth callback
+  const isOAuthCallback = searchParams.has("ott") || searchParams.has("code");
 
   const {
     isAuthenticated,
@@ -157,8 +161,8 @@ function AppContent() {
     }
   }, [deleteSession, urlSessionId, navigate]);
 
-  // Show skeleton while auth is initializing
-  if (isAuthLoading) {
+  // Show skeleton while auth is initializing OR processing OAuth callback
+  if (isAuthLoading || isOAuthCallback) {
     return (
       <div className="app-layout">
         <div className="sidebar skeleton-sidebar">

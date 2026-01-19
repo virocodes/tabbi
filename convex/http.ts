@@ -6,17 +6,7 @@ import { authComponent, createAuth } from "./auth";
 const http = httpRouter();
 
 // Add Better Auth HTTP routes with CORS enabled
-authComponent.registerRoutes(http, createAuth, {
-  cors: {
-    allowedOrigins: [
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "https://tabbi.dev",
-      "https://www.tabbi.dev",
-      process.env.SITE_URL || "http://localhost:3000",
-    ],
-  },
-});
+authComponent.registerRoutes(http, createAuth, { cors: true });
 
 // Validate API token endpoint (called by Cloudflare Worker)
 http.route({

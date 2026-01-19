@@ -93,9 +93,12 @@ export class SessionAgent implements DurableObject {
 
   /**
    * Build Modal endpoint URL from function name
+   * Uses -dev suffix only in development mode (modal serve)
+   * Production uses deployed endpoints without -dev suffix (modal deploy)
    */
   private getModalUrl(functionName: string): string {
-    return `${this.env.MODAL_API_URL}-${functionName}-dev.modal.run`;
+    const suffix = this.env.DEV_MODE === "true" ? "-dev.modal.run" : ".modal.run";
+    return `${this.env.MODAL_API_URL}-${functionName}${suffix}`;
   }
 
   /**

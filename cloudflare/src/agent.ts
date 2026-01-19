@@ -141,7 +141,7 @@ export class SessionAgent implements DurableObject {
   }
 
   /**
-   * Update session status in Convex
+   * Update session status in Convex (with retry)
    */
   private async updateConvexStatus(): Promise<void> {
     if (!this.convexSiteUrl || !this.apiToken) {
@@ -149,7 +149,7 @@ export class SessionAgent implements DurableObject {
       return;
     }
 
-    try {
+    await this.withRetry(async () => {
       const response = await fetch(`${this.convexSiteUrl}/api/session-status`, {
         method: "POST",
         headers: {
@@ -167,15 +167,46 @@ export class SessionAgent implements DurableObject {
       });
 
       if (!response.ok) {
-        this.logError("Failed to update Convex status:", await response.text());
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
-    } catch (err) {
-      this.logError("Error updating Convex status:", err);
-    }
+      return response;
+    }, "updateConvexStatus");
   }
 
   /**
-   * Sync a message to Convex
+   * Execute operation with exponential backoff retry (P1-2)
+   * Returns null if all retries failed, otherwise returns the result
+   */
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    operationName: string,
+    maxRetries = 3
+  ): Promise<T | null> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (err) {
+        const isLastAttempt = attempt === maxRetries - 1;
+
+        // Check if error is retryable (network errors, 5xx responses)
+        const isRetryable = !(err instanceof Response && (err as Response).status < 500);
+
+        if (isLastAttempt || !isRetryable) {
+          this.logError(`${operationName} failed permanently after ${attempt + 1} attempts:`, err);
+          return null;
+        }
+
+        const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+        this.log(`${operationName} failed (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Sync a message to Convex (with retry)
    */
   private async syncMessageToConvex(message: Message): Promise<void> {
     if (!this.convexSiteUrl || !this.apiToken) {
@@ -183,7 +214,7 @@ export class SessionAgent implements DurableObject {
       return;
     }
 
-    try {
+    await this.withRetry(async () => {
       const response = await fetch(`${this.convexSiteUrl}/api/sync-message`, {
         method: "POST",
         headers: {
@@ -201,11 +232,11 @@ export class SessionAgent implements DurableObject {
       });
 
       if (!response.ok) {
-        this.logError("Failed to sync message to Convex:", await response.text());
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
-    } catch (err) {
-      this.logError("Error syncing message to Convex:", err);
-    }
+      return response;
+    }, "syncMessageToConvex");
   }
 
   /**
@@ -654,6 +685,11 @@ export class SessionAgent implements DurableObject {
    * Auto-resumes from snapshot if session is paused or stopped
    */
   async handlePrompt(text: string): Promise<void> {
+    // GUARD: Prevent concurrent prompt processing (P0-3)
+    if (this.sessionState.isProcessing) {
+      throw new Error("A prompt is already being processed. Please wait for it to complete.");
+    }
+
     this.log("handlePrompt called, status:", this.sessionState.status, "sandboxUrl:", this.sessionState.sandboxUrl);
 
     // Add user message to state FIRST (before any resume) so it's included in all broadcasts
@@ -1195,6 +1231,12 @@ export class SessionAgent implements DurableObject {
   async handlePause(): Promise<void> {
     if (this.sessionState.status !== "running" || !this.sessionState.sandboxId) {
       throw new Error("Session is not running");
+    }
+
+    // GUARD: Don't pause during active processing (P0-4)
+    // Snapshot during execution can create inconsistent state
+    if (this.sessionState.isProcessing) {
+      throw new Error("Cannot pause while processing a prompt. Please wait for completion or stop the session.");
     }
 
     // Cancel auto-pause alarm since we're manually pausing

@@ -12,6 +12,7 @@ Each sandbox:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import time
@@ -51,7 +52,8 @@ def verify_auth(request) -> None:
         raise HTTPException(status_code=401, detail="Invalid Authorization header format")
 
     token = auth_header[7:]  # Remove "Bearer " prefix
-    if token != expected_secret:
+    # Use constant-time comparison to prevent timing attacks
+    if not hmac.compare_digest(token, expected_secret):
         raise HTTPException(status_code=403, detail="Invalid API secret")
 
 # Image for web endpoints (requires FastAPI and Pydantic)
@@ -101,10 +103,19 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     )
     print(f"[2/10] Sandbox created with ID: {sb.object_id}")
 
-    # Clone the repository
+    # Configure git credentials securely (PAT not visible in process listing)
+    # Store credentials in a file with restricted permissions
+    print(f"[3/10] Configuring git credentials...")
+    credential_url = f"https://x-access-token:{pat}@github.com"
+    sb.exec(
+        "sh", "-c",
+        f"umask 077 && echo '{credential_url}' > /root/.git-credentials"
+    ).wait()
+    sb.exec("git", "config", "--global", "credential.helper", "store --file=/root/.git-credentials").wait()
+
+    # Clone the repository (PAT is read from credential store, not command line)
     print(f"[3/10] Cloning repository...")
-    clone_url = f"https://{pat}@github.com/{repo}.git"
-    clone_result = sb.exec("git", "clone", clone_url, "/workspace")
+    clone_result = sb.exec("git", "clone", f"https://github.com/{repo}.git", "/workspace")
     clone_result.wait()
 
     if clone_result.returncode != 0:
@@ -164,10 +175,10 @@ async def create_sandbox(repo: str, pat: str) -> dict:
         verify_output = verify_output.decode("utf-8")
     print(f"[5/10] Verified git user.name: {verify_output.strip()}")
 
-    # Configure credential helper to use the PAT for push operations
+    # Set origin URL without PAT - credentials are handled by git credential helper
     sb.exec(
         "git", "remote", "set-url", "origin",
-        f"https://{pat}@github.com/{repo}.git",
+        f"https://github.com/{repo}.git",
         workdir="/workspace"
     ).wait()
 
@@ -199,10 +210,15 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     print(f"[8/10] Config file created: {config_result.stdout.read()[:100]}...")
 
     # Start OpenCode server in the background
+    # Write GH_TOKEN to a secure environment file (not visible in ps aux)
     print("[9/10] Starting OpenCode server...")
     sb.exec(
         "sh", "-c",
-        f"cd /workspace && GH_TOKEN='{pat}' opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
+        f"umask 077 && echo 'export GH_TOKEN=\"{pat}\"' > /root/.opencode-env"
+    ).wait()
+    sb.exec(
+        "sh", "-c",
+        "cd /workspace && source /root/.opencode-env && opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
     ).wait()
 
     # Give the server time to start
@@ -266,18 +282,31 @@ async def pause_sandbox(sandbox_id: str) -> dict:
         sandbox_id: The Modal sandbox ID
 
     Returns:
-        dict with snapshot_id for later resume
+        dict with snapshot_id for later resume, or error if snapshot failed
     """
+    print(f"[pause] Pausing sandbox: {sandbox_id}")
     sb = modal.Sandbox.from_id(sandbox_id)
 
-    # Capture filesystem snapshot
-    snapshot = sb.snapshot_filesystem()
+    # Capture filesystem snapshot - if this fails, don't terminate
+    try:
+        snapshot = sb.snapshot_filesystem()
+        snapshot_id = snapshot.object_id
+        print(f"[pause] Snapshot created: {snapshot_id}")
+    except Exception as e:
+        print(f"[pause] ERROR: Snapshot failed: {e}")
+        # Do NOT terminate - let session continue running so user doesn't lose work
+        return {"error": f"Snapshot failed: {str(e)}"}
 
-    # Terminate the sandbox to free resources
-    sb.terminate()
+    # Only terminate after successful snapshot
+    try:
+        sb.terminate()
+        print("[pause] Sandbox terminated")
+    except Exception as e:
+        print(f"[pause] Warning: Terminate failed (snapshot still saved): {e}")
+        # Continue anyway - snapshot is saved, sandbox may have already timed out
 
     return {
-        "snapshot_id": snapshot.object_id,
+        "snapshot_id": snapshot_id,
     }
 
 
@@ -292,6 +321,8 @@ async def resume_sandbox(snapshot_id: str) -> dict:
     Returns:
         dict with new sandbox_id and tunnel_url
     """
+    print(f"[resume] Starting resume from snapshot: {snapshot_id}")
+
     # Restore image from snapshot
     image = modal.Image.from_id(snapshot_id)
 
@@ -303,24 +334,52 @@ async def resume_sandbox(snapshot_id: str) -> dict:
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
     )
+    print(f"[resume] Sandbox created with ID: {sb.object_id}")
 
-    # Start OpenCode server again (don't wait for it)
+    # Start OpenCode server again using the saved environment
+    # Source the env file that was created during initial sandbox creation
+    print("[resume] Starting OpenCode server...")
     sb.exec(
-        "opencode",
-        "serve",
-        "--port", "4096",
-        "--hostname", "0.0.0.0",
-        workdir="/workspace",
-    )
-    # Note: Not calling .wait() so it runs in background
+        "sh", "-c",
+        "cd /workspace && source /root/.opencode-env 2>/dev/null; opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
+    ).wait()
 
-    # Give the server a moment to start
-    await asyncio.sleep(3)
-
-    # Get new tunnel URL
+    # Get tunnel URL
     tunnels = sb.tunnels()
     tunnel_url = tunnels[4096].url
+    print(f"[resume] Tunnel URL: {tunnel_url}")
 
+    # Give the server initial time to start
+    print("[resume] Waiting for server to start (3 seconds)...")
+    await asyncio.sleep(3)
+
+    # Verify OpenCode is running with health checks (same as create_sandbox)
+    print("[resume] Verifying OpenCode server is ready...")
+    for i in range(30):  # 30 attempts, 2 sec each = 60 sec max
+        health_result = sb.exec(
+            "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+            "http://localhost:4096/global/health"
+        )
+        health_result.wait()
+        health_code = health_result.stdout.read()
+        if isinstance(health_code, bytes):
+            health_code = health_code.decode("utf-8").strip()
+
+        if health_code == "200":
+            print(f"[resume] OpenCode server is ready (attempt {i + 1})")
+            break
+
+        print(f"[resume] Health check returned {health_code}, retrying... (attempt {i + 1}/30)")
+        await asyncio.sleep(2)
+    else:
+        # Log output for debugging
+        log_result = sb.exec("sh", "-c", "cat /tmp/opencode.log 2>/dev/null || echo 'No log file'")
+        log_result.wait()
+        log_output = log_result.stdout.read()
+        print(f"[resume] OpenCode log: {log_output[:500] if log_output else 'empty'}")
+        raise Exception("OpenCode server failed to start after resume (30 attempts)")
+
+    print("[resume] Resume complete!")
     return {
         "sandbox_id": sb.object_id,
         "tunnel_url": tunnel_url,
@@ -338,11 +397,14 @@ async def terminate_sandbox(sandbox_id: str) -> dict:
     Returns:
         dict with success status
     """
+    print(f"[terminate] Terminating sandbox: {sandbox_id}")
     try:
         sb = modal.Sandbox.from_id(sandbox_id)
         sb.terminate()
+        print("[terminate] Sandbox terminated successfully")
         return {"success": True}
     except Exception as e:
+        print(f"[terminate] ERROR: Failed to terminate sandbox: {e}")
         return {"success": False, "error": str(e)}
 
 

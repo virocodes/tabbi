@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useConvexAuth } from "convex/react";
 import { useAuth } from "../hooks/useAuth";
 import { GitHubAuth } from "./GitHubAuth";
@@ -8,6 +8,10 @@ export function LoginPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const { signInWithGitHub, reposError } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Check if we're in the middle of an OAuth callback
+  const isOAuthCallback = searchParams.has("ott") || searchParams.has("code");
 
   // Redirect to /app if already authenticated
   useEffect(() => {
@@ -16,8 +20,8 @@ export function LoginPage() {
     }
   }, [isAuthenticated, isLoading, navigate]);
 
-  // Show nothing while checking auth (brief flash)
-  if (isLoading) {
+  // Show skeleton while checking auth OR processing OAuth callback
+  if (isLoading || isOAuthCallback) {
     return (
       <div className="auth-page">
         <div className="auth-content">

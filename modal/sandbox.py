@@ -94,12 +94,15 @@ async def create_sandbox(repo: str, pat: str) -> dict:
 
     # Create sandbox with tunnel on port 4096
     # 10 minute timeout - Cloudflare DO will auto-pause before this
+    # Using 1 core + 2GB RAM (sufficient for OpenCode server + git operations)
     print("[2/10] Creating Modal sandbox with encrypted port 4096...")
     sb = modal.Sandbox.create(
         image=sandbox_image,
         app=app,
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
+        cpu=1.0,
+        memory=2048,  # 2GB in MB
     )
     print(f"[2/10] Sandbox created with ID: {sb.object_id}")
 
@@ -328,11 +331,14 @@ async def resume_sandbox(snapshot_id: str) -> dict:
 
     # Create new sandbox with restored state
     # 10 minute timeout - Cloudflare DO will auto-pause before this
+    # Using 1 core + 2GB RAM (same as create_sandbox)
     sb = modal.Sandbox.create(
         image=image,
         app=app,
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
+        cpu=1.0,
+        memory=2048,  # 2GB in MB
     )
     print(f"[resume] Sandbox created with ID: {sb.object_id}")
 

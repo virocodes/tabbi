@@ -459,20 +459,34 @@ export class SessionAgent implements DurableObject {
       // Fetch GitHub token from Convex (with auto-refresh)
       this.log("Fetching GitHub token from Convex...");
       const gitHubToken = await this.fetchGitHubToken();
+      this.log("GitHub token fetched, length:", gitHubToken?.length || 0);
 
       // Call Modal API to create sandbox (longer timeout for repo cloning)
-      const response = await fetch(this.getModalUrl("api-create-sandbox"), {
+      const modalUrl = this.getModalUrl("api-create-sandbox");
+      const requestBody = {
+        repo: request.repo,
+        pat: gitHubToken,
+      };
+
+      this.log("Calling Modal API:", modalUrl);
+      this.log("Request body keys:", Object.keys(requestBody));
+      this.log("Request body repo:", request.repo);
+      this.log("Request body pat length:", gitHubToken?.length || 0);
+
+      const response = await fetch(modalUrl, {
         method: "POST",
         headers: this.getModalHeaders(),
-        body: JSON.stringify({
-          repo: request.repo,
-          pat: gitHubToken,  // Use GitHub token fetched from Convex
-        }),
+        body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(SANDBOX_CREATE_TIMEOUT_MS),
       });
 
+      this.log("Modal API response status:", response.status);
+      this.log("Modal API response statusText:", response.statusText);
+
       if (!response.ok) {
-        throw new Error(`Modal API error: ${response.statusText}`);
+        const errorBody = await response.text();
+        this.logError("Modal API error response body:", errorBody);
+        throw new Error(`Modal API error: ${response.statusText} - ${errorBody}`);
       }
 
       const result = (await response.json()) as {
@@ -609,14 +623,24 @@ export class SessionAgent implements DurableObject {
    * Create a session on the OpenCode server
    */
   private async createOpenCodeSession(sandboxUrl: string): Promise<string> {
-    const response = await fetch(`${sandboxUrl}/session`, {
+    const sessionUrl = `${sandboxUrl}/session`;
+    const requestBody = { title: `Session ${Date.now()}` };
+
+    this.log("Creating OpenCode session at:", sessionUrl);
+    this.log("Request body:", JSON.stringify(requestBody));
+
+    const response = await fetch(sessionUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(requestBody),
     });
+
+    this.log("OpenCode session response status:", response.status);
+    this.log("OpenCode session response headers:", JSON.stringify(Object.fromEntries(response.headers.entries())));
 
     if (!response.ok) {
       const errText = await response.text();
+      this.logError("OpenCode session creation failed:", response.status, errText);
       throw new Error(`Failed to create OpenCode session: ${response.status} ${errText}`);
     }
 

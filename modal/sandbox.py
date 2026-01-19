@@ -26,6 +26,10 @@ app = modal.App("coding-agent-sandbox")
 # Set via: modal secret create modal-api-secret MODAL_API_SECRET=your-secret-here
 api_secret = modal.Secret.from_name("modal-api-secret")
 
+# Secret for LLM provider API keys (Anthropic)
+# Set via: modal secret create anthropic-secret ANTHROPIC_API_KEY=your-key-here
+llm_secret = modal.Secret.from_name("anthropic-secret")
+
 
 def verify_auth(request) -> None:
     """Verify the Authorization header matches the API secret.
@@ -52,8 +56,8 @@ def verify_auth(request) -> None:
     if token != expected_secret:
         raise HTTPException(status_code=403, detail="Invalid API secret")
 
-# Image for web endpoints (requires FastAPI)
-endpoint_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]")
+# Image for web endpoints (requires FastAPI and Pydantic)
+endpoint_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]", "pydantic")
 
 # Base image with git, node, gh CLI, and opencode installed
 sandbox_image = (
@@ -86,29 +90,40 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     Returns:
         dict with sandbox_id and tunnel_url
     """
+    print(f"[1/10] Starting sandbox creation for repo: {repo}")
+
     # Create sandbox with tunnel on port 4096
     # 10 minute timeout - Cloudflare DO will auto-pause before this
+    # Pass LLM secret so OpenCode has access to ANTHROPIC_API_KEY
+    print("[2/10] Creating Modal sandbox with encrypted port 4096...")
     sb = modal.Sandbox.create(
         image=sandbox_image,
         app=app,
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
+        secrets=[llm_secret],
     )
+    print(f"[2/10] Sandbox created with ID: {sb.object_id}")
 
     # Clone the repository
+    print(f"[3/10] Cloning repository...")
     clone_url = f"https://{pat}@github.com/{repo}.git"
     clone_result = sb.exec("git", "clone", clone_url, "/workspace")
     clone_result.wait()
 
     if clone_result.returncode != 0:
         error = clone_result.stderr.read()
+        print(f"[3/10] ERROR: Clone failed: {error}")
         sb.terminate()
         raise Exception(f"Failed to clone repository: {error}")
+    print("[3/10] Repository cloned successfully")
 
     # Authenticate GitHub CLI with the PAT first (needed to fetch user identity)
+    print("[4/10] Authenticating GitHub CLI...")
     sb.exec("sh", "-c", f"echo '{pat}' | gh auth login --with-token").wait()
 
     # Fetch the authenticated user's identity from GitHub
+    print("[5/10] Fetching GitHub user identity...")
     user_result = sb.exec("gh", "api", "user", "--jq", ".login")
     user_result.wait()
     github_username = user_result.stdout.read().strip() or "github-user"
@@ -125,9 +140,10 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     name_result.wait()
     github_name = name_result.stdout.read().strip() or github_username
 
-    print(f"Configuring git as: {github_name} <{github_email}>")
+    print(f"[5/10] GitHub user: {github_name} <{github_email}>")
 
     # Configure git with the user's actual identity
+    print("[6/10] Configuring git...")
     sb.exec("git", "config", "user.email", github_email, workdir="/workspace").wait()
     sb.exec("git", "config", "user.name", github_name, workdir="/workspace").wait()
 
@@ -140,27 +156,97 @@ async def create_sandbox(repo: str, pat: str) -> dict:
 
     # Create and checkout a new branch for this session
     branch_name = f"opencode/session-{int(time.time())}"
+    print(f"[6/10] Creating branch: {branch_name}")
     checkout_result = sb.exec("git", "checkout", "-b", branch_name, workdir="/workspace")
     checkout_result.wait()
 
     if checkout_result.returncode != 0:
         error = checkout_result.stderr.read()
-        print(f"Warning: Failed to create branch {branch_name}: {error}")
+        print(f"[6/10] Warning: Failed to create branch {branch_name}: {error}")
         # Continue anyway - agent can still work on default branch
 
-    # Also set GH_TOKEN in environment for OpenCode to use
-    # Start OpenCode server in the background with GH_TOKEN set
+    # Check if ANTHROPIC_API_KEY is available
+    print("[7/10] Checking environment variables...")
+    env_check = sb.exec("sh", "-c", "echo ANTHROPIC_API_KEY is set: ${ANTHROPIC_API_KEY:+YES}${ANTHROPIC_API_KEY:-NO}")
+    env_check.wait()
+    env_output = env_check.stdout.read().strip()
+    print(f"[7/10] {env_output}")
+
+    # Create OpenCode configuration file with model settings
+    # This is required for OpenCode to know which provider/model to use
+    print("[8/10] Creating opencode.json configuration...")
+    opencode_config = '''{
+  "model": "anthropic/claude-sonnet-4-5",
+  "provider": {
+    "anthropic": {
+      "options": {
+        "apiKey": "{env:ANTHROPIC_API_KEY}"
+      }
+    }
+  },
+  "server": {
+    "port": 4096,
+    "hostname": "0.0.0.0"
+  }
+}'''
+    config_result = sb.exec(
+        "sh", "-c",
+        f"echo '{opencode_config}' > /workspace/opencode.json && cat /workspace/opencode.json"
+    )
+    config_result.wait()
+    print(f"[8/10] Config file created: {config_result.stdout.read()[:100]}...")
+
+    # Start OpenCode server in the background
+    print("[9/10] Starting OpenCode server...")
     sb.exec(
         "sh", "-c",
         f"cd /workspace && GH_TOKEN='{pat}' opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
     ).wait()
 
     # Give the server time to start
-    await asyncio.sleep(3)
+    print("[9/10] Waiting for server to start (5 seconds)...")
+    await asyncio.sleep(5)
+
+    # Check if OpenCode is running and get logs
+    print("[9/10] Checking OpenCode status...")
+    ps_result = sb.exec("sh", "-c", "ps aux | grep opencode || echo 'No opencode process found'")
+    ps_result.wait()
+    ps_output = ps_result.stdout.read().strip()
+    print(f"[9/10] Processes: {ps_output}")
+
+    log_result = sb.exec("sh", "-c", "cat /tmp/opencode.log 2>/dev/null || echo 'No log file yet'")
+    log_result.wait()
+    log_output = log_result.stdout.read().strip()
+    print(f"[9/10] OpenCode log: {log_output[:500] if log_output else 'empty'}")
+
+    # Test health endpoint locally
+    print("[9/10] Testing health endpoint locally...")
+    health_result = sb.exec("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:4096/global/health")
+    health_result.wait()
+    health_code = health_result.stdout.read().strip()
+    print(f"[9/10] Health check response code: {health_code}")
+
+    # Test session creation locally
+    print("[9/10] Testing session creation locally...")
+    session_result = sb.exec(
+        "curl", "-s", "-X", "POST",
+        "-H", "Content-Type: application/json",
+        "-d", '{"title": "test-session"}',
+        "http://localhost:4096/session"
+    )
+    session_result.wait()
+    session_output = session_result.stdout.read().strip()
+    session_error = session_result.stderr.read().strip()
+    print(f"[9/10] Local session test result: {session_output[:200] if session_output else 'empty'}")
+    if session_error:
+        print(f"[9/10] Local session test error: {session_error}")
 
     # Get tunnel URL
+    print("[10/10] Getting tunnel URL...")
     tunnels = sb.tunnels()
     tunnel_url = tunnels[4096].url
+    print(f"[10/10] Tunnel URL: {tunnel_url}")
+    print(f"[10/10] Sandbox creation complete!")
 
     return {
         "sandbox_id": sb.object_id,
@@ -209,11 +295,13 @@ async def resume_sandbox(snapshot_id: str) -> dict:
 
     # Create new sandbox with restored state
     # 10 minute timeout - Cloudflare DO will auto-pause before this
+    # Pass LLM secret so OpenCode has access to ANTHROPIC_API_KEY
     sb = modal.Sandbox.create(
         image=image,
         app=app,
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
+        secrets=[llm_secret],
     )
 
     # Start OpenCode server again (don't wait for it)
@@ -283,10 +371,29 @@ async def get_sandbox_logs(sandbox_id: str) -> dict:
         health_output = check_port.stdout.read()
         health_error = check_port.stderr.read()
 
+        # Get OpenCode log file
+        log_result = sb.exec("cat", "/tmp/opencode.log")
+        log_result.wait()
+        opencode_log = log_result.stdout.read()
+
+        # Try creating a session locally to test
+        session_test = sb.exec(
+            "curl", "-s", "-X", "POST",
+            "-H", "Content-Type: application/json",
+            "-d", '{"title": "test"}',
+            "http://localhost:4096/session"
+        )
+        session_test.wait()
+        session_result = session_test.stdout.read()
+        session_error = session_test.stderr.read()
+
         return {
             "processes": processes,
             "health_check": health_output,
             "health_error": health_error,
+            "opencode_log": opencode_log,
+            "session_test_result": session_result,
+            "session_test_error": session_error,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -330,20 +437,38 @@ async def get_sandbox_status(sandbox_id: str) -> dict:
         }
 
 
+# Pydantic models for request bodies - defined here so they're available at import time
+# The actual imports happen inside the endpoint functions since they run with endpoint_image
+class CreateSandboxRequest:
+    """Request body for creating a sandbox."""
+    repo: str
+    pat: str
+
+
 # HTTP endpoint for Cloudflare Worker to call
 @app.function(image=endpoint_image, secrets=[api_secret])
 @modal.fastapi_endpoint(method="POST")
-async def api_create_sandbox(request: Request) -> dict:
+async def api_create_sandbox(body: dict) -> dict:
     """HTTP endpoint to create a sandbox."""
-    verify_auth(request)
-    body = await request.json()
-    repo = body.get("repo")
-    pat = body.get("pat")
+    print(f"[api_create_sandbox] Received request body: {body}")
+
+    repo = body.get("repo") if isinstance(body, dict) else None
+    pat = body.get("pat") if isinstance(body, dict) else None
+
+    print(f"[api_create_sandbox] Parsed: repo={repo}, pat={'[SET]' if pat else 'None'}")
 
     if not repo or not pat:
+        print(f"[api_create_sandbox] Missing parameters")
         return {"error": "Missing repo or pat parameter"}
 
-    return await create_sandbox.remote.aio(repo=repo, pat=pat)
+    print(f"[api_create_sandbox] Calling create_sandbox for repo: {repo}")
+    try:
+        result = await create_sandbox.remote.aio(repo=repo, pat=pat)
+        print(f"[api_create_sandbox] create_sandbox returned: {result}")
+        return result
+    except Exception as e:
+        print(f"[api_create_sandbox] create_sandbox failed: {e}")
+        return {"error": str(e)}
 
 
 @app.function(image=endpoint_image, secrets=[api_secret])

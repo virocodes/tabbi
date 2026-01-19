@@ -91,12 +91,8 @@ function AppContent() {
     }
   }, [sessionState?.status, sessionState?.sessionId, isConnected, sendPrompt]);
 
-  // Navigate to session URL when session is created
-  useEffect(() => {
-    if (sessionState?.sessionId && sessionState.sessionId !== urlSessionId) {
-      navigate(`/app/session/${sessionState.sessionId}`, { replace: true });
-    }
-  }, [sessionState?.sessionId, urlSessionId, navigate]);
+  // Note: We no longer auto-navigate when session is created.
+  // Navigation happens in handleSubmitMessage when user clicks Send.
 
   const handleLogout = useCallback(async () => {
     await signOut();
@@ -116,15 +112,22 @@ function AppContent() {
 
   // Handle message submission
   const handleSubmitMessage = useCallback((message: string) => {
-    if (sessionReady && isConnected && sessionState?.sessionId) {
+    if (!sessionState?.sessionId) return;
+
+    // Navigate to the session page when user submits
+    if (sessionState.sessionId !== urlSessionId) {
+      navigate(`/app/session/${sessionState.sessionId}`, { replace: true });
+    }
+
+    if (sessionReady && isConnected) {
       // Session is ready - send immediately
       sendPrompt(message);
-    } else if (sessionState?.sessionId) {
+    } else {
       // Session not ready - store message for this specific session
       pendingMessagesRef.current.set(sessionState.sessionId, message);
       setCurrentPendingMessage(message);
     }
-  }, [sessionReady, isConnected, sessionState?.sessionId, sendPrompt]);
+  }, [sessionReady, isConnected, sessionState?.sessionId, urlSessionId, navigate, sendPrompt]);
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     // Restore pending message for this session if any

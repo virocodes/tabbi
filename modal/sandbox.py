@@ -9,11 +9,16 @@ Each sandbox:
 4. Supports pause/resume via filesystem snapshots
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 import time
 import modal
-from fastapi import Request, HTTPException
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 app = modal.App("coding-agent-sandbox")
 
@@ -22,8 +27,14 @@ app = modal.App("coding-agent-sandbox")
 api_secret = modal.Secret.from_name("modal-api-secret")
 
 
-def verify_auth(request: Request) -> None:
-    """Verify the Authorization header matches the API secret."""
+def verify_auth(request) -> None:
+    """Verify the Authorization header matches the API secret.
+
+    Note: FastAPI Request type hint removed to avoid import at module level.
+    Import happens inside endpoint functions that use endpoint_image.
+    """
+    from fastapi import HTTPException
+
     auth_header = request.headers.get("Authorization")
     expected_secret = os.environ.get("MODAL_API_SECRET")
 

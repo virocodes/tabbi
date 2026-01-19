@@ -27,9 +27,6 @@ app = modal.App("coding-agent-sandbox")
 # Set via: modal secret create modal-api-secret MODAL_API_SECRET=your-secret-here
 api_secret = modal.Secret.from_name("modal-api-secret")
 
-# Secret for LLM provider API keys (Anthropic)
-# Set via: modal secret create anthropic-secret ANTHROPIC_API_KEY=your-key-here
-llm_secret = modal.Secret.from_name("anthropic-secret")
 
 
 def verify_auth(request) -> None:
@@ -95,14 +92,12 @@ async def create_sandbox(repo: str, pat: str) -> dict:
 
     # Create sandbox with tunnel on port 4096
     # 10 minute timeout - Cloudflare DO will auto-pause before this
-    # Pass LLM secret so OpenCode has access to ANTHROPIC_API_KEY
     print("[2/10] Creating Modal sandbox with encrypted port 4096...")
     sb = modal.Sandbox.create(
         image=sandbox_image,
         app=app,
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
-        secrets=[llm_secret],
     )
     print(f"[2/10] Sandbox created with ID: {sb.object_id}")
 
@@ -186,13 +181,6 @@ async def create_sandbox(repo: str, pat: str) -> dict:
         error = checkout_result.stderr.read()
         print(f"[6/10] Warning: Failed to create branch {branch_name}: {error}")
         # Continue anyway - agent can still work on default branch
-
-    # Check if ANTHROPIC_API_KEY is available
-    print("[7/10] Checking environment variables...")
-    env_check = sb.exec("sh", "-c", "echo ANTHROPIC_API_KEY is set: ${ANTHROPIC_API_KEY:+YES}${ANTHROPIC_API_KEY:-NO}")
-    env_check.wait()
-    env_output = env_check.stdout.read().strip()
-    print(f"[7/10] {env_output}")
 
     # Create OpenCode configuration file with server settings
     # Let OpenCode use its default model
@@ -309,13 +297,11 @@ async def resume_sandbox(snapshot_id: str) -> dict:
 
     # Create new sandbox with restored state
     # 10 minute timeout - Cloudflare DO will auto-pause before this
-    # Pass LLM secret so OpenCode has access to ANTHROPIC_API_KEY
     sb = modal.Sandbox.create(
         image=image,
         app=app,
         timeout=600,  # 10 minute timeout
         encrypted_ports=[4096],
-        secrets=[llm_secret],
     )
 
     # Start OpenCode server again (don't wait for it)

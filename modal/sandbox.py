@@ -194,18 +194,10 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     env_output = env_check.stdout.read().strip()
     print(f"[7/10] {env_output}")
 
-    # Create OpenCode configuration file with model settings
-    # This is required for OpenCode to know which provider/model to use
+    # Create OpenCode configuration file with server settings
+    # Let OpenCode use its default model
     print("[8/10] Creating opencode.json configuration...")
     opencode_config = '''{
-  "model": "anthropic/claude-sonnet-4-5",
-  "provider": {
-    "anthropic": {
-      "options": {
-        "apiKey": "{env:ANTHROPIC_API_KEY}"
-      }
-    }
-  },
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0"

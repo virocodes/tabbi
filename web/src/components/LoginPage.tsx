@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useConvexAuth } from "convex/react";
 import { useAuth } from "../hooks/useAuth";
@@ -7,6 +7,7 @@ import { GitHubAuth } from "./GitHubAuth";
 export function LoginPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const { signInWithGitHub, reposError } = useAuth();
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -40,10 +41,15 @@ export function LoginPage() {
     return null;
   }
 
+  const handleSignIn = () => {
+    setIsSigningIn(true);
+    signInWithGitHub();
+  };
+
   return (
     <GitHubAuth
-      onSignIn={signInWithGitHub}
-      isLoading={false}
+      onSignIn={handleSignIn}
+      isLoading={isSigningIn}
       error={reposError}
     />
   );

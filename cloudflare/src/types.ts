@@ -9,6 +9,7 @@ export interface Env {
   CONVEX_SITE_URL: string;
   ALLOWED_ORIGINS: string;  // Comma-separated list of allowed origins for CORS
   DEV_MODE?: string;  // Set to "true" to enable debug logging
+  MODAL_ENV?: string;  // Set to "production" to use .modal.run (deployed), otherwise uses -dev.modal.run
 }
 
 export type SessionStatus = 'idle' | 'starting' | 'running' | 'paused' | 'error';

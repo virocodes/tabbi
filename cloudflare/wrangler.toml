@@ -32,7 +32,8 @@ name = "coding-agent-api-production"
 MODAL_API_URL = "https://dbellan1291--coding-agent-sandbox"
 CONVEX_SITE_URL = "https://cheery-anaconda-510.convex.site"
 ALLOWED_ORIGINS = "https://tabbi.dev,https://www.tabbi.dev"
-# DEV_MODE not set = logging disabled in production
+DEV_MODE = "true"  # Temporarily enabled for debugging
+MODAL_ENV = "production"  # Use production Modal endpoints (.modal.run not -dev.modal.run)
 # MODAL_API_SECRET should be set via wrangler secret put MODAL_API_SECRET
 
 [[env.production.durable_objects.bindings]]

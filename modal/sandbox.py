@@ -120,25 +120,40 @@ async def create_sandbox(repo: str, pat: str) -> dict:
 
     # Authenticate GitHub CLI with the PAT first (needed to fetch user identity)
     print("[4/10] Authenticating GitHub CLI...")
-    sb.exec("sh", "-c", f"echo '{pat}' | gh auth login --with-token").wait()
+    auth_result = sb.exec("sh", "-c", f"echo '{pat}' | gh auth login --with-token")
+    auth_result.wait()
+    if auth_result.returncode != 0:
+        print(f"[4/10] Warning: gh auth login failed: {auth_result.stderr.read()}")
 
     # Fetch the authenticated user's identity from GitHub
     print("[5/10] Fetching GitHub user identity...")
     user_result = sb.exec("gh", "api", "user", "--jq", ".login")
     user_result.wait()
-    github_username = user_result.stdout.read().strip() or "github-user"
+    user_output = user_result.stdout.read()
+    # Handle both bytes and string output
+    if isinstance(user_output, bytes):
+        user_output = user_output.decode("utf-8")
+    github_username = user_output.strip() or "github-user"
+    print(f"[5/10] Username: {github_username}")
 
     email_result = sb.exec("gh", "api", "user", "--jq", ".email // empty")
     email_result.wait()
-    github_email = email_result.stdout.read().strip()
+    email_output = email_result.stdout.read()
+    if isinstance(email_output, bytes):
+        email_output = email_output.decode("utf-8")
+    github_email = email_output.strip()
 
     # If email is private/empty, use the GitHub noreply email
     if not github_email:
         github_email = f"{github_username}@users.noreply.github.com"
+    print(f"[5/10] Email: {github_email}")
 
     name_result = sb.exec("gh", "api", "user", "--jq", ".name // .login")
     name_result.wait()
-    github_name = name_result.stdout.read().strip() or github_username
+    name_output = name_result.stdout.read()
+    if isinstance(name_output, bytes):
+        name_output = name_output.decode("utf-8")
+    github_name = name_output.strip() or github_username
 
     print(f"[5/10] GitHub user: {github_name} <{github_email}>")
 

@@ -11,6 +11,8 @@ authComponent.registerRoutes(http, createAuth, {
     allowedOrigins: [
       "http://localhost:3000",
       "http://localhost:5173",
+      "https://tabbi.dev",
+      "https://www.tabbi.dev",
       process.env.SITE_URL || "http://localhost:3000",
     ],
   },

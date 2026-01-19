@@ -12,6 +12,7 @@ Each sandbox:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import modal
@@ -118,47 +119,41 @@ async def create_sandbox(repo: str, pat: str) -> dict:
         raise Exception(f"Failed to clone repository: {error}")
     print("[3/10] Repository cloned successfully")
 
-    # Authenticate GitHub CLI with the PAT first (needed to fetch user identity)
-    print("[4/10] Authenticating GitHub CLI...")
-    auth_result = sb.exec("sh", "-c", f"echo '{pat}' | gh auth login --with-token")
-    auth_result.wait()
-    if auth_result.returncode != 0:
-        print(f"[4/10] Warning: gh auth login failed: {auth_result.stderr.read()}")
-
-    # Fetch the authenticated user's identity from GitHub
-    print("[5/10] Fetching GitHub user identity...")
-    user_result = sb.exec("gh", "api", "user", "--jq", ".login")
+    # Fetch the authenticated user's identity directly from GitHub API using curl
+    # This avoids the gh CLI which requires additional scopes like read:org
+    print("[4/10] Fetching GitHub user identity...")
+    user_result = sb.exec(
+        "curl", "-s", "-H", f"Authorization: Bearer {pat}",
+        "-H", "Accept: application/vnd.github+json",
+        "https://api.github.com/user"
+    )
     user_result.wait()
     user_output = user_result.stdout.read()
-    # Handle both bytes and string output
     if isinstance(user_output, bytes):
         user_output = user_output.decode("utf-8")
-    github_username = user_output.strip() or "github-user"
-    print(f"[5/10] Username: {github_username}")
 
-    email_result = sb.exec("gh", "api", "user", "--jq", ".email // empty")
-    email_result.wait()
-    email_output = email_result.stdout.read()
-    if isinstance(email_output, bytes):
-        email_output = email_output.decode("utf-8")
-    github_email = email_output.strip()
+    # Parse JSON response
+    try:
+        user_data = json.loads(user_output)
+        github_username = user_data.get("login", "github-user")
+        github_email = user_data.get("email") or ""
+        github_name = user_data.get("name") or github_username
+        print(f"[4/10] API response: login={github_username}, name={github_name}, email={github_email or 'private'}")
+    except json.JSONDecodeError as e:
+        print(f"[4/10] Warning: Failed to parse GitHub API response: {e}")
+        print(f"[4/10] Response was: {user_output[:200]}")
+        github_username = "github-user"
+        github_email = ""
+        github_name = "github-user"
 
     # If email is private/empty, use the GitHub noreply email
     if not github_email:
         github_email = f"{github_username}@users.noreply.github.com"
-    print(f"[5/10] Email: {github_email}")
 
-    name_result = sb.exec("gh", "api", "user", "--jq", ".name // .login")
-    name_result.wait()
-    name_output = name_result.stdout.read()
-    if isinstance(name_output, bytes):
-        name_output = name_output.decode("utf-8")
-    github_name = name_output.strip() or github_username
-
-    print(f"[5/10] GitHub user: {github_name} <{github_email}>")
+    print(f"[4/10] GitHub user: {github_name} <{github_email}>")
 
     # Configure git with the user's actual identity
-    print("[6/10] Configuring git...")
+    print("[5/10] Configuring git...")
     sb.exec("git", "config", "user.email", github_email, workdir="/workspace").wait()
     sb.exec("git", "config", "user.name", github_name, workdir="/workspace").wait()
 

@@ -5,18 +5,19 @@
 export interface Env {
   SESSION_AGENT: DurableObjectNamespace;
   MODAL_API_URL: string;
-  MODAL_API_SECRET?: string;  // Secret for authenticating with Modal endpoints
+  MODAL_API_SECRET?: string; // Secret for authenticating with Modal endpoints
   CONVEX_SITE_URL: string;
-  ALLOWED_ORIGINS: string;  // Comma-separated list of allowed origins for CORS
-  DEV_MODE?: string;  // Set to "true" to enable debug logging
-  MODAL_ENV?: string;  // Set to "production" to use .modal.run (deployed), otherwise uses -dev.modal.run
+  ALLOWED_ORIGINS: string; // Comma-separated list of allowed origins for CORS
+  DEV_MODE?: string; // Set to "true" to enable debug logging
+  MODAL_ENV?: string; // Set to "production" to use .modal.run (deployed), otherwise uses -dev.modal.run
+  SENTRY_DSN?: string; // Sentry DSN for error tracking
 }
 
-export type SessionStatus = 'idle' | 'starting' | 'running' | 'paused' | 'error';
+export type SessionStatus = "idle" | "starting" | "running" | "paused" | "error";
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   parts: MessagePart[];
   timestamp: number;
 }
@@ -26,12 +27,12 @@ export interface ToolCall {
   name: string;
   arguments: Record<string, unknown>;
   result?: string;
-  state?: 'pending' | 'running' | 'completed' | 'error';
+  state?: "pending" | "running" | "completed" | "error";
 }
 
 // A message part - either text or a tool call
 export interface MessagePart {
-  type: 'text' | 'tool';
+  type: "text" | "tool";
   text?: string;
   toolCall?: ToolCall;
 }
@@ -47,8 +48,10 @@ export interface SessionState {
   status: SessionStatus;
   isProcessing?: boolean;
   messages: Message[];
-  streamingMessage?: Message;  // In-progress assistant message (persisted during streaming)
+  streamingMessage?: Message; // In-progress assistant message (persisted during streaming)
   error?: string;
+  selectedModel?: string;
+  provider?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -56,6 +59,8 @@ export interface SessionState {
 export interface CreateSessionRequest {
   sessionId: string;
   repo: string;
+  selectedModel?: string;
+  provider?: string;
 }
 
 export interface PromptRequest {
@@ -78,12 +83,12 @@ export interface AuthContext {
 
 // OpenCode SDK types - Event types from SSE stream
 export type OpenCodeEventType =
-  | 'server.connected'
-  | 'session.idle'
-  | 'message.part.updated'
-  | 'message.start'
-  | 'message.complete'
-  | 'error';
+  | "server.connected"
+  | "session.idle"
+  | "message.part.updated"
+  | "message.start"
+  | "message.complete"
+  | "error";
 
 export interface OpenCodeEvent {
   type: OpenCodeEventType;
@@ -97,15 +102,15 @@ export interface OpenCodeEvent {
 
 // Structure of parts from OpenCode SSE events
 export interface OpenCodePart {
-  id: string;           // Unique part ID from OpenCode
-  messageID: string;    // Which message this belongs to
-  type: 'text' | 'tool' | 'tool-call' | 'tool_call' | 'tool-invocation' | 'tool_use';
-  text?: string;        // Full accumulated text (for text parts)
-  tool?: string;        // Tool name (for tool parts)
-  name?: string;        // Alternative tool name field
-  toolName?: string;    // Alternative tool name field
-  callID?: string;      // Alternative part ID field
-  toolCallId?: string;  // Alternative part ID field
+  id: string; // Unique part ID from OpenCode
+  messageID: string; // Which message this belongs to
+  type: "text" | "tool" | "tool-call" | "tool_call" | "tool-invocation" | "tool_use";
+  text?: string; // Full accumulated text (for text parts)
+  tool?: string; // Tool name (for tool parts)
+  name?: string; // Alternative tool name field
+  toolName?: string; // Alternative tool name field
+  callID?: string; // Alternative part ID field
+  toolCallId?: string; // Alternative part ID field
   state?: {
     input?: Record<string, unknown>;
     output?: string;
@@ -120,14 +125,14 @@ export interface OpenCodePart {
 
 // Internal tracking structure for parts with ordering metadata
 export interface TrackedPart {
-  partId: string;       // OpenCode's unique part ID
-  messageId: string;    // OpenCode's message ID
-  firstSeenAt: number;  // For chronological ordering
-  part: MessagePart;    // Normalized part for UI
+  partId: string; // OpenCode's unique part ID
+  messageId: string; // OpenCode's message ID
+  firstSeenAt: number; // For chronological ordering
+  part: MessagePart; // Normalized part for UI
 }
 
 // WebSocket message types
 export interface WSMessage {
-  type: 'state' | 'event' | 'error';
+  type: "state" | "event" | "error";
   payload: unknown;
 }

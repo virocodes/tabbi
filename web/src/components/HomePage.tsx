@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import type { Repository } from "../hooks/useAuth";
 import { FloatingCatChars } from "./FloatingCatChars";
+import { ModelSelector } from "./ModelSelector";
+import type { Provider } from "../lib/models";
 
 interface HomePageProps {
   repos: Repository[];
@@ -9,7 +11,11 @@ interface HomePageProps {
   isReady: boolean;
   isPendingSubmit: boolean;
   startupPhase: string | null;
-  onStartTyping: (repo: string) => void;
+  selectedModel: string;
+  configuredProviders: Provider[];
+  onModelChange: (modelId: string) => void;
+  onConfigureKey: (provider: "anthropic" | "openai") => void;
+  onStartTyping: (repo: string, model: string) => void;
   onSubmitMessage: (message: string) => void;
 }
 
@@ -20,6 +26,10 @@ export function HomePage({
   isReady,
   isPendingSubmit,
   startupPhase,
+  selectedModel,
+  configuredProviders,
+  onModelChange,
+  onConfigureKey,
   onStartTyping,
   onSubmitMessage,
 }: HomePageProps) {
@@ -63,7 +73,7 @@ export function HomePage({
     // Start session when user types first character
     if (newValue.length > 0 && !hasStartedTyping && selectedRepo) {
       setHasStartedTyping(true);
-      onStartTyping(selectedRepo);
+      onStartTyping(selectedRepo, selectedModel);
     }
   };
 
@@ -101,7 +111,11 @@ export function HomePage({
               value={message}
               onChange={handleMessageChange}
               onKeyDown={handleKeyDown}
-              placeholder={selectedRepo ? "Describe what you'd like to build or fix..." : "Select a repo to get started..."}
+              placeholder={
+                selectedRepo
+                  ? "Describe what you'd like to build or fix..."
+                  : "Select a repo to get started..."
+              }
               disabled={!selectedRepo || isPendingSubmit}
             />
 
@@ -140,6 +154,15 @@ export function HomePage({
                   )}
                 </div>
 
+                {/* Model Selector */}
+                <ModelSelector
+                  selectedModel={selectedModel}
+                  configuredProviders={configuredProviders}
+                  onModelChange={onModelChange}
+                  onConfigureKey={onConfigureKey}
+                  disabled={hasStartedTyping}
+                />
+
                 {/* Status indicator */}
                 {hasStartedTyping && (
                   <div className="home-session-status">
@@ -165,11 +188,7 @@ export function HomePage({
                 )}
               </div>
 
-              <button
-                type="submit"
-                disabled={!canSubmit}
-                className="home-submit-btn"
-              >
+              <button type="submit" disabled={!canSubmit} className="home-submit-btn">
                 {getButtonText()}
               </button>
             </div>

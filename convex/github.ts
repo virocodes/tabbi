@@ -30,15 +30,12 @@ export const fetchUserRepos = action({
     console.log("[fetchUserRepos] Token found, fetching repos...");
 
     // Fetch repos from GitHub API
-    const response = await fetch(
-      "https://api.github.com/user/repos?per_page=100&sort=updated",
-      {
-        headers: {
-          Authorization: `token ${tokenResult.accessToken}`,
-          Accept: "application/vnd.github.v3+json",
-        },
-      }
-    );
+    const response = await fetch("https://api.github.com/user/repos?per_page=100&sort=updated", {
+      headers: {
+        Authorization: `token ${tokenResult.accessToken}`,
+        Accept: "application/vnd.github.v3+json",
+      },
+    });
 
     if (!response.ok) {
       if (response.status === 401) {

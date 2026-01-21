@@ -33,7 +33,9 @@ export function LandingPage() {
 
       <header className="landing-header">
         <div className="landing-logo">
-          <span className="logo-emoticon">{'>'}⩊{'<'}</span>
+          <span className="logo-emoticon">
+            {">"}⩊{"<"}
+          </span>
           <span>tabbi</span>
         </div>
         {isLoading ? (
@@ -53,7 +55,10 @@ export function LandingPage() {
       <main className="landing-main">
         <div className="landing-hero">
           <h1>Ship PRs while you sleep</h1>
-          <p>Autonomous coding agents that work in parallel, turning your ideas into production code around the clock</p>
+          <p>
+            Autonomous coding agents that work in parallel, turning your ideas into production code
+            around the clock
+          </p>
           <Link to={isAuthenticated ? "/app" : "/login"} className="landing-cta">
             Get started
           </Link>

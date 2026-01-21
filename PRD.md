@@ -7,6 +7,7 @@ This document outlines the implementation plan for adding Convex as the backend 
 ## Problem Statement
 
 ### Current State
+
 - Users manually enter GitHub Personal Access Tokens (PAT) which are stored in browser localStorage
 - Sessions are identified only by UUID with no user association
 - Anyone who knows a session ID can access that session
@@ -14,6 +15,7 @@ This document outlines the implementation plan for adding Convex as the backend 
 - Single-user experience only
 
 ### Target State
+
 - Users authenticate via GitHub OAuth (no manual PAT entry)
 - Sessions are linked to authenticated users
 - Users can only access their own sessions
@@ -26,6 +28,7 @@ This document outlines the implementation plan for adding Convex as the backend 
 ## Architecture
 
 ### Current Architecture
+
 ```
 React Frontend ──► Cloudflare Workers ──► Modal Sandbox
      │                    │                    │
@@ -34,6 +37,7 @@ React Frontend ──► Cloudflare Workers ──► Modal Sandbox
 ```
 
 ### New Architecture
+
 ```
 React Frontend ──────► Convex Backend ──────► Cloudflare Workers ──► Modal Sandbox
      │                       │                       │                    │
@@ -42,6 +46,7 @@ React Frontend ──────► Convex Backend ──────► Cloudf
 ```
 
 ### Key Changes
+
 1. **Convex** manages users, authentication, session metadata, GitHub tokens, and message history
 2. **Cloudflare Workers** validate requests via Convex-issued API tokens
 3. **Sessions** are linked to authenticated users via userId foreign key
@@ -56,61 +61,66 @@ React Frontend ──────► Convex Backend ──────► Cloudf
 ### Tables
 
 #### Better Auth Component Tables (managed by @convex-dev/better-auth)
+
 - `user` - Base user records
 - `session` - Auth sessions
 - `account` - OAuth provider accounts (stores GitHub access tokens)
 - `verification` - Verification codes
 
 #### `userProfiles`
-| Field | Type | Description |
-|-------|------|-------------|
-| authUserId | string | Reference to Better Auth user ID |
-| githubUsername | string | GitHub login |
-| githubId | number | GitHub numeric ID |
-| avatarUrl | string? | GitHub avatar URL |
-| name | string? | Display name |
-| email | string? | Email address |
-| createdAt | number | Timestamp |
-| updatedAt | number | Timestamp |
+
+| Field          | Type    | Description                      |
+| -------------- | ------- | -------------------------------- |
+| authUserId     | string  | Reference to Better Auth user ID |
+| githubUsername | string  | GitHub login                     |
+| githubId       | number  | GitHub numeric ID                |
+| avatarUrl      | string? | GitHub avatar URL                |
+| name           | string? | Display name                     |
+| email          | string? | Email address                    |
+| createdAt      | number  | Timestamp                        |
+| updatedAt      | number  | Timestamp                        |
 
 **Indexes:** by_authUserId, by_githubId
 
 #### `codingSessions`
-| Field | Type | Description |
-|-------|------|-------------|
-| authUserId | string | Session owner (Better Auth user ID) |
-| sessionId | string | UUID for Cloudflare DO |
-| repo | string | GitHub repo "owner/repo" |
-| title | string? | First user message |
-| status | enum | idle/starting/running/paused/error |
-| isProcessing | boolean | Currently processing prompt |
-| snapshotId | string? | Modal snapshot ID |
-| errorMessage | string? | Error details |
-| createdAt | number | Timestamp |
-| updatedAt | number | Timestamp |
+
+| Field        | Type    | Description                         |
+| ------------ | ------- | ----------------------------------- |
+| authUserId   | string  | Session owner (Better Auth user ID) |
+| sessionId    | string  | UUID for Cloudflare DO              |
+| repo         | string  | GitHub repo "owner/repo"            |
+| title        | string? | First user message                  |
+| status       | enum    | idle/starting/running/paused/error  |
+| isProcessing | boolean | Currently processing prompt         |
+| snapshotId   | string? | Modal snapshot ID                   |
+| errorMessage | string? | Error details                       |
+| createdAt    | number  | Timestamp                           |
+| updatedAt    | number  | Timestamp                           |
 
 **Indexes:** by_authUserId, by_sessionId, by_authUserId_updatedAt
 
 #### `sessionMessages`
-| Field | Type | Description |
-|-------|------|-------------|
-| sessionId | string | Parent session UUID |
-| messageId | string | OpenCode message ID |
-| role | enum | user/assistant/system |
-| parts | array | Text and tool call parts |
-| timestamp | number | Message timestamp |
-| createdAt | number | Sync timestamp |
+
+| Field     | Type   | Description              |
+| --------- | ------ | ------------------------ |
+| sessionId | string | Parent session UUID      |
+| messageId | string | OpenCode message ID      |
+| role      | enum   | user/assistant/system    |
+| parts     | array  | Text and tool call parts |
+| timestamp | number | Message timestamp        |
+| createdAt | number | Sync timestamp           |
 
 **Indexes:** by_sessionId, by_sessionId_timestamp
 
 #### `apiTokens`
-| Field | Type | Description |
-|-------|------|-------------|
+
+| Field      | Type   | Description                       |
+| ---------- | ------ | --------------------------------- |
 | authUserId | string | Token owner (Better Auth user ID) |
-| tokenHash | string | SHA-256 hash |
-| sessionId | string | Associated session |
-| expiresAt | number | Expiry timestamp |
-| createdAt | number | Timestamp |
+| tokenHash  | string | SHA-256 hash                      |
+| sessionId  | string | Associated session                |
+| expiresAt  | number | Expiry timestamp                  |
+| createdAt  | number | Timestamp                         |
 
 **Indexes:** by_tokenHash, by_authUserId
 
@@ -121,53 +131,60 @@ React Frontend ──────► Convex Backend ──────► Cloudf
 ### Convex Functions
 
 #### Queries (Real-time subscriptions)
-| Function | Args | Returns | Description |
-|----------|------|---------|-------------|
-| `users.getCurrentUser` | - | UserProfile | Current user profile |
-| `sessions.listUserSessions` | - | Session[] | User's sessions |
-| `sessions.getSession` | sessionId | Session | Single session |
-| `messages.getSessionMessages` | sessionId | Message[] | Session messages |
+
+| Function                      | Args      | Returns     | Description          |
+| ----------------------------- | --------- | ----------- | -------------------- |
+| `users.getCurrentUser`        | -         | UserProfile | Current user profile |
+| `sessions.listUserSessions`   | -         | Session[]   | User's sessions      |
+| `sessions.getSession`         | sessionId | Session     | Single session       |
+| `messages.getSessionMessages` | sessionId | Message[]   | Session messages     |
 
 #### Mutations
-| Function | Args | Returns | Description |
-|----------|------|---------|-------------|
-| `sessions.createSession` | repo | {sessionId, apiToken} | Create session + token |
-| `sessions.updateSessionStatus` | sessionId, status, ... | void | Update status |
-| `sessions.deleteSession` | sessionId | void | Delete session + messages |
+
+| Function                       | Args                   | Returns               | Description               |
+| ------------------------------ | ---------------------- | --------------------- | ------------------------- |
+| `sessions.createSession`       | repo                   | {sessionId, apiToken} | Create session + token    |
+| `sessions.updateSessionStatus` | sessionId, status, ... | void                  | Update status             |
+| `sessions.deleteSession`       | sessionId              | void                  | Delete session + messages |
 
 #### Internal Mutations
-| Function | Description |
-|----------|-------------|
-| `messages.syncMessage` | Sync single message |
-| `messages.syncBatch` | Batch sync messages |
-| `users.storeUserProfile` | Store/update user profile |
-| `tokens.createApiToken` | Generate API token |
-| `tokens.validateApiToken` | Validate token |
+
+| Function                  | Description               |
+| ------------------------- | ------------------------- |
+| `messages.syncMessage`    | Sync single message       |
+| `messages.syncBatch`      | Batch sync messages       |
+| `users.storeUserProfile`  | Store/update user profile |
+| `tokens.createApiToken`   | Generate API token        |
+| `tokens.validateApiToken` | Validate token            |
 
 #### Actions (External API calls)
-| Function | Description |
-|----------|-------------|
-| `github.fetchUserRepos` | Fetch repos from GitHub API |
-| `github.getValidToken` | Get token from Better Auth accounts |
+
+| Function                | Description                         |
+| ----------------------- | ----------------------------------- |
+| `github.fetchUserRepos` | Fetch repos from GitHub API         |
+| `github.getValidToken`  | Get token from Better Auth accounts |
 
 #### HTTP Actions
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/validate-token` | POST | Validate API token |
-| `/api/github-token` | POST | Get GitHub token |
-| `/api/session-status` | POST | Update session status |
-| `/api/sync-message` | POST | Sync message from CF |
+
+| Endpoint              | Method | Description           |
+| --------------------- | ------ | --------------------- |
+| `/api/validate-token` | POST   | Validate API token    |
+| `/api/github-token`   | POST   | Get GitHub token      |
+| `/api/session-status` | POST   | Update session status |
+| `/api/sync-message`   | POST   | Sync message from CF  |
 
 ---
 
 ## Authentication Flow
 
 ### GitHub OAuth Setup
+
 1. Configure GitHub OAuth App with callback URL: `https://<project>.convex.site/api/auth/callback/github`
 2. Request scopes: `repo user:email`
 3. Store `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET` in Convex environment
 
 ### Flow Steps
+
 1. User clicks "Sign in with GitHub"
 2. `authClient.signIn.social({ provider: "github" })` redirects to GitHub OAuth consent
 3. User approves access
@@ -182,6 +199,7 @@ React Frontend ──────► Convex Backend ──────► Cloudf
 ## Data Flows
 
 ### Session Creation
+
 ```
 1. User selects repo, starts session
 2. Frontend calls sessions.createSession mutation
@@ -196,6 +214,7 @@ React Frontend ──────► Convex Backend ──────► Cloudf
 ```
 
 ### Message Processing
+
 ```
 1. User sends prompt via WebSocket
 2. SessionAgent adds user message to DO state
@@ -212,47 +231,51 @@ React Frontend ──────► Convex Backend ──────► Cloudf
 ## Files to Create
 
 ### Convex Directory (`convex/`)
-| File | Purpose |
-|------|---------|
+
+| File               | Purpose                        |
+| ------------------ | ------------------------------ |
 | `convex.config.ts` | Register Better Auth component |
-| `schema.ts` | Database schema definition |
-| `auth.ts` | Better Auth configuration |
-| `auth.config.ts` | JWT provider configuration |
-| `users.ts` | User profile queries/mutations |
-| `sessions.ts` | Session CRUD operations |
-| `messages.ts` | Message sync and retrieval |
-| `github.ts` | GitHub API actions |
-| `tokens.ts` | API token management |
-| `http.ts` | HTTP actions for Cloudflare |
+| `schema.ts`        | Database schema definition     |
+| `auth.ts`          | Better Auth configuration      |
+| `auth.config.ts`   | JWT provider configuration     |
+| `users.ts`         | User profile queries/mutations |
+| `sessions.ts`      | Session CRUD operations        |
+| `messages.ts`      | Message sync and retrieval     |
+| `github.ts`        | GitHub API actions             |
+| `tokens.ts`        | API token management           |
+| `http.ts`          | HTTP actions for Cloudflare    |
 
 ## Files to Modify
 
 ### Frontend (`web/`)
-| File | Changes |
-|------|---------|
-| `package.json` | Add convex, @convex-dev/better-auth, better-auth |
-| `src/main.tsx` | Wrap with ConvexBetterAuthProvider |
-| `src/lib/auth-client.ts` | Better Auth client setup |
-| `src/hooks/useAuth.ts` | Replace localStorage with Better Auth |
-| `src/hooks/useSession.ts` | Use Convex mutations, pass API token |
-| `src/hooks/useSessions.ts` | Replace with Convex query |
-| `src/components/GitHubAuth.tsx` | Replace PAT input with OAuth button |
-| `src/components/Sidebar.tsx` | Use Convex subscription |
-| `src/App.tsx` | Update auth flow, URL-based routing |
+
+| File                            | Changes                                          |
+| ------------------------------- | ------------------------------------------------ |
+| `package.json`                  | Add convex, @convex-dev/better-auth, better-auth |
+| `src/main.tsx`                  | Wrap with ConvexBetterAuthProvider               |
+| `src/lib/auth-client.ts`        | Better Auth client setup                         |
+| `src/hooks/useAuth.ts`          | Replace localStorage with Better Auth            |
+| `src/hooks/useSession.ts`       | Use Convex mutations, pass API token             |
+| `src/hooks/useSessions.ts`      | Replace with Convex query                        |
+| `src/components/GitHubAuth.tsx` | Replace PAT input with OAuth button              |
+| `src/components/Sidebar.tsx`    | Use Convex subscription                          |
+| `src/App.tsx`                   | Update auth flow, URL-based routing              |
 
 ### Cloudflare (`cloudflare/`)
-| File | Changes |
-|------|---------|
-| `wrangler.toml` | Add CONVEX_SITE_URL env var |
-| `src/index.ts` | Add auth middleware |
-| `src/agent.ts` | Fetch token from Convex, store userId |
-| `src/registry.ts` | DELETE (replaced by Convex) |
+
+| File              | Changes                               |
+| ----------------- | ------------------------------------- |
+| `wrangler.toml`   | Add CONVEX_SITE_URL env var           |
+| `src/index.ts`    | Add auth middleware                   |
+| `src/agent.ts`    | Fetch token from Convex, store userId |
+| `src/registry.ts` | DELETE (replaced by Convex)           |
 
 ---
 
 ## Environment Variables
 
 ### Convex Dashboard
+
 ```
 SITE_URL=http://localhost:3000
 BETTER_AUTH_SECRET=<generated-secret>
@@ -261,11 +284,13 @@ AUTH_GITHUB_SECRET=<github-oauth-secret>
 ```
 
 ### Cloudflare (wrangler.toml)
+
 ```
 CONVEX_SITE_URL=https://<project>.convex.site
 ```
 
 ### Web (.env)
+
 ```
 VITE_CONVEX_URL=https://<project>.convex.cloud
 VITE_CONVEX_SITE_URL=https://<project>.convex.site
@@ -289,6 +314,7 @@ VITE_API_URL=http://localhost:8787
 ## Phase 1: Project Setup
 
 ### 1.1 Initialize Convex
+
 - [x] Run `npx convex init` in project root
 - [x] Verify `convex/` directory created
 - [x] Verify `.env.local` created with CONVEX_URL
@@ -296,11 +322,13 @@ VITE_API_URL=http://localhost:8787
 - [x] Verify Convex dashboard accessible
 
 ### 1.2 Install Dependencies
+
 - [x] Install Convex packages: `npm install convex @convex-dev/better-auth better-auth`
 - [x] Verify packages in web/package.json
 - [x] Run `npm install` in web directory
 
 ### 1.3 GitHub OAuth App Setup
+
 - [x] Go to GitHub Settings > Developer settings > OAuth Apps
 - [x] Create new OAuth App for development
 - [x] Set Homepage URL to `http://localhost:3000`
@@ -315,6 +343,7 @@ VITE_API_URL=http://localhost:8787
 ## Phase 2: Convex Schema & Auth
 
 ### 2.1 Create Schema
+
 - [x] Create `convex/schema.ts`
 - [x] Define `userProfiles` table with fields and indexes
 - [x] Define `codingSessions` table with all status fields
@@ -326,6 +355,7 @@ VITE_API_URL=http://localhost:8787
 Note: Better Auth manages its own tables via component - no need for `authTables` or `githubTokens` table
 
 ### 2.2 Configure Better Auth
+
 - [x] Create `convex/convex.config.ts` - register Better Auth component
 - [x] Create `convex/auth.ts` - Better Auth configuration
 - [x] Create `convex/auth.config.ts` - JWT provider configuration
@@ -333,6 +363,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 - [x] Configure crossDomain and convex plugins
 
 ### 2.3 Implement Auth Routes
+
 - [x] Register auth routes in `convex/http.ts`
 - [x] Configure CORS for frontend origins
 
@@ -341,6 +372,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 ## Phase 3: Convex Functions
 
 ### 3.1 User Functions (`convex/users.ts`)
+
 - [x] Create `getCurrentUser` query
   - [x] Get auth user with `safeGetAuthUser`
   - [x] Query `userProfiles` by authUserId
@@ -350,6 +382,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Upsert into `userProfiles` table
 
 ### 3.2 Session Functions (`convex/sessions.ts`)
+
 - [x] Create `listUserSessions` query
   - [x] Get auth user
   - [x] Query `codingSessions` by authUserId, order by updatedAt desc
@@ -381,6 +414,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Delete session record
 
 ### 3.3 Message Functions (`convex/messages.ts`)
+
 - [x] Create `getSessionMessages` query
   - [x] Get auth user
   - [x] Query session to verify ownership
@@ -396,6 +430,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Bulk upsert messages
 
 ### 3.4 Token Functions (`convex/tokens.ts`)
+
 - [x] Create `hashToken` helper function
   - [x] Use crypto.subtle.digest SHA-256
   - [x] Return hex string
@@ -416,6 +451,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Delete expired tokens
 
 ### 3.5 GitHub Functions (`convex/github.ts`)
+
 - [x] Create `fetchUserRepos` action
   - [x] Get auth with Better Auth API
   - [x] Get GitHub access token
@@ -426,6 +462,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Return access token
 
 ### 3.6 HTTP Actions (`convex/http.ts`)
+
 - [x] Create HTTP router
 - [x] Register Better Auth routes with CORS
 - [x] Add `POST /api/validate-token` route
@@ -453,6 +490,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 ## Phase 4: Frontend Migration
 
 ### 4.1 Provider Setup
+
 - [x] Update `web/src/main.tsx`
   - [x] Import `ConvexReactClient` from `convex/react`
   - [x] Import `ConvexBetterAuthProvider` from `@convex-dev/better-auth/react`
@@ -461,12 +499,14 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Keep BrowserRouter inside provider
 
 ### 4.2 Create Auth Client
+
 - [x] Create `web/src/lib/auth-client.ts`
   - [x] Import `createAuthClient` from `better-auth/react`
   - [x] Configure with convexClient and crossDomainClient plugins
   - [x] Set baseURL to VITE_CONVEX_SITE_URL
 
 ### 4.3 Update useAuth Hook
+
 - [x] Modify `web/src/hooks/useAuth.ts`
   - [x] Import `useConvexAuth` from `convex/react`
   - [x] Import `authClient` from auth-client
@@ -478,6 +518,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Use Convex action for repos
 
 ### 4.4 Update GitHubAuth Component
+
 - [x] Modify `web/src/components/GitHubAuth.tsx`
   - [x] Remove PAT input field
   - [x] Remove token validation logic
@@ -487,6 +528,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Handle auth errors
 
 ### 4.5 Update useSession Hook
+
 - [x] Modify `web/src/hooks/useSession.ts`
   - [x] Import `useMutation` from `convex/react`
   - [x] Use Convex `createSession` mutation instead of direct fetch
@@ -496,6 +538,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Remove PAT parameter from createSession
 
 ### 4.6 Update useSessions Hook
+
 - [x] Modify `web/src/hooks/useSessions.ts`
   - [x] Import `useQuery`, `useMutation` from `convex/react`
   - [x] Replace fetch-based listing with `useQuery(api.sessions.listUserSessions)`
@@ -503,6 +546,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Use Convex mutation for delete
 
 ### 4.7 Update Sidebar Component
+
 - [x] Modify `web/src/components/Sidebar.tsx`
   - [x] Use sessions from Convex hook (passed as prop)
   - [x] No manual refresh button needed (real-time)
@@ -510,6 +554,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Show user profile/avatar from Convex
 
 ### 4.8 Update App Component
+
 - [x] Modify `web/src/App.tsx`
   - [x] Use new Convex auth hook
   - [x] Show skeleton loading state while auth loads
@@ -519,6 +564,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Add URL-based routing for sessions
 
 ### 4.9 Update LandingPage
+
 - [x] Modify `web/src/components/LandingPage.tsx`
   - [x] Add "Go to App" link
 
@@ -527,10 +573,12 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 ## Phase 5: Cloudflare Updates
 
 ### 5.1 Add Environment Variables
+
 - [x] Update `cloudflare/wrangler.toml`
   - [x] Add `CONVEX_SITE_URL` to `[vars]`
 
 ### 5.2 Create Auth Middleware
+
 - [x] Create auth middleware in `cloudflare/src/index.ts`
   - [x] Export `authMiddleware` function
   - [x] Extract token from Authorization header
@@ -540,6 +588,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Return 401 if invalid
 
 ### 5.3 Update Routes
+
 - [x] Modify `cloudflare/src/index.ts`
   - [x] Apply middleware to `/sessions/*` routes
   - [x] Verify sessionId matches token's sessionId
@@ -548,6 +597,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Remove direct PAT handling
 
 ### 5.4 Update SessionAgent
+
 - [x] Modify `cloudflare/src/agent.ts`
   - [x] Add `userId` to session state
   - [x] Add `apiToken` and `convexSiteUrl` to stored config
@@ -566,12 +616,14 @@ Note: Better Auth manages its own tables via component - no need for `authTables
   - [x] Add auto-resume from snapshot when sending to paused session
 
 ### 5.5 Remove SessionRegistry
+
 - [x] Delete `cloudflare/src/registry.ts`
 - [x] Remove SessionRegistry from `wrangler.toml` bindings
 - [x] Remove SessionRegistry imports from `index.ts`
 - [x] Remove registry update calls from `agent.ts`
 
 ### 5.6 Update Types
+
 - [x] Modify `cloudflare/src/types.ts`
   - [x] Add userId to session state interface
   - [x] Add AuthContext interface
@@ -582,6 +634,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 ## Phase 6: Testing
 
 ### 6.1 Authentication Tests
+
 - [x] Test: Click "Sign in with GitHub" redirects to GitHub
 - [x] Test: After approval, redirected back authenticated
 - [x] Test: User profile displays (avatar, username)
@@ -590,6 +643,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 - [x] Test: Protected routes redirect to sign in
 
 ### 6.2 Session Management Tests
+
 - [x] Test: Create session creates record in Convex
 - [x] Test: Session appears in sidebar immediately
 - [x] Test: User A cannot see User B's sessions
@@ -598,6 +652,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 - [x] Test: Reconnecting to session loads history
 
 ### 6.3 Message Sync Tests
+
 - [x] Test: User message synced immediately
 - [x] Test: Assistant message synced after completion
 - [x] Test: Messages persist after browser refresh
@@ -605,12 +660,14 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 - [x] Test: Message order maintained
 
 ### 6.4 Sandbox Tests
+
 - [x] Test: Cloudflare receives valid API token
 - [x] Test: GitHub token retrieved from Convex
 - [x] Test: Modal sandbox clones repo successfully
 - [x] Test: OpenCode accepts and processes prompts
 
 ### 6.5 Security Tests
+
 - [x] Test: Unauthenticated requests get 401
 - [x] Test: Wrong user accessing session gets 403
 - [x] Test: Expired API tokens rejected
@@ -621,6 +678,7 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 ## Phase 7: Cleanup & Deploy
 
 ### 7.1 Code Cleanup
+
 - [x] Remove localStorage PAT code from useAuth
 - [x] Remove unused GitHub API calls from frontend
 - [x] Remove SessionRegistry references
@@ -628,18 +686,21 @@ Note: Better Auth manages its own tables via component - no need for `authTables
 - [x] Update comments and documentation
 
 ### 7.2 Environment Setup for Production
+
 - [ ] Create production GitHub OAuth App
 - [ ] Set production callback URL
 - [ ] Configure production Convex environment
 - [ ] Set production environment variables
 
 ### 7.3 Deployment
+
 - [ ] Deploy Convex: `npx convex deploy`
 - [ ] Deploy Cloudflare: `npm run deploy`
 - [ ] Deploy web to hosting platform
 - [ ] Verify all services connected
 
 ### 7.4 Documentation
+
 - [x] CLAUDE.md has Convex commands
 - [x] Environment variables documented above
 - [x] Authentication flow documented above

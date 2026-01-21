@@ -28,12 +28,12 @@ An AI-powered coding agent platform that lets you interact with an AI assistant 
 
 ### Components
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **web/** | React + Vite + TypeScript | Frontend application |
-| **cloudflare/** | Cloudflare Workers + Durable Objects + Hono | API layer and session management |
-| **modal/** | Modal + Python | Isolated sandbox environments running OpenCode |
-| **convex/** | Convex | Backend database, auth, and real-time sync |
+| Component       | Technology                                  | Purpose                                        |
+| --------------- | ------------------------------------------- | ---------------------------------------------- |
+| **web/**        | React + Vite + TypeScript                   | Frontend application                           |
+| **cloudflare/** | Cloudflare Workers + Durable Objects + Hono | API layer and session management               |
+| **modal/**      | Modal + Python                              | Isolated sandbox environments running OpenCode |
+| **convex/**     | Convex                                      | Backend database, auth, and real-time sync     |
 
 ## Getting Started
 
@@ -46,12 +46,14 @@ An AI-powered coding agent platform that lets you interact with an AI assistant 
 ### Installation
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/virocodes/tabbi.git
    cd tabbi
    ```
 
 2. **Install dependencies**
+
    ```bash
    # Root dependencies (Convex)
    npm install
@@ -69,12 +71,14 @@ An AI-powered coding agent platform that lets you interact with an AI assistant 
 3. **Configure environment variables**
 
    Copy the example files and fill in your values:
+
    ```bash
    cp .env.example .env
    cp web/.env.example web/.env
    ```
 
 4. **Set up Convex**
+
    ```bash
    npx convex dev
    ```
@@ -86,12 +90,14 @@ An AI-powered coding agent platform that lets you interact with an AI assistant 
    - `AUTH_GITHUB_SECRET`
 
 5. **Deploy Modal sandbox**
+
    ```bash
    cd modal
    modal deploy sandbox.py
    ```
 
 6. **Start development servers**
+
    ```bash
    # Terminal 1: Convex
    npx convex dev
@@ -114,6 +120,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for comprehensive production deployment ins
 ## Development Commands
 
 ### Web Frontend
+
 ```bash
 cd web
 npm run dev          # Start dev server (port 3000)
@@ -122,6 +129,7 @@ npm run preview      # Preview production build
 ```
 
 ### Cloudflare Worker
+
 ```bash
 cd cloudflare
 npm run dev          # Start local dev server (port 8787)
@@ -130,6 +138,7 @@ npm run typecheck    # Type checking
 ```
 
 ### Modal Sandbox
+
 ```bash
 cd modal
 modal serve sandbox.py    # Development with hot reload
@@ -137,6 +146,7 @@ modal deploy sandbox.py   # Production deployment
 ```
 
 ### Convex Backend
+
 ```bash
 npx convex dev       # Development with hot reload
 npx convex deploy    # Production deployment
@@ -157,5 +167,3 @@ idle → starting → running ⟷ paused → error
 ## License
 
 MIT
-
-

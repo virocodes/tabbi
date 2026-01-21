@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 This is a coding agent application with three components:
+
 - **web/** - React frontend (Vite + TypeScript)
 - **cloudflare/** - API backend (Cloudflare Workers + Durable Objects + Hono)
 - **modal/** - Sandbox runtime (Modal Python sandboxes running OpenCode server)
@@ -23,6 +24,7 @@ Data flow: User prompt -> WebSocket -> SessionAgent DO -> OpenCode SSE events ->
 ## Development Commands
 
 ### Web (port 3000)
+
 ```bash
 cd web
 npm install
@@ -31,6 +33,7 @@ npm run build        # TypeScript compile + Vite build
 ```
 
 ### Cloudflare Workers (port 8787)
+
 ```bash
 cd cloudflare
 npm install
@@ -40,6 +43,7 @@ npm run typecheck    # tsc --noEmit
 ```
 
 ### Modal Backend
+
 ```bash
 cd modal
 pip install -r requirements.txt

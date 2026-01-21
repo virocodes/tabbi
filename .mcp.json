@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-playwright@latest"],
+      "timeout": 120
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@context7/mcp-server@latest"]
+    }
+  }
+}

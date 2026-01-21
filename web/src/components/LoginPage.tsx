@@ -27,9 +27,15 @@ export function LoginPage() {
       <div className="auth-page">
         <div className="auth-content">
           <div className="auth-card">
-            <div className="skeleton-box" style={{ width: '180px', height: '32px', margin: '0 auto 16px' }} />
-            <div className="skeleton-box" style={{ width: '220px', height: '20px', margin: '0 auto 32px' }} />
-            <div className="skeleton-box" style={{ width: '100%', height: '48px' }} />
+            <div
+              className="skeleton-box"
+              style={{ width: "180px", height: "32px", margin: "0 auto 16px" }}
+            />
+            <div
+              className="skeleton-box"
+              style={{ width: "220px", height: "20px", margin: "0 auto 32px" }}
+            />
+            <div className="skeleton-box" style={{ width: "100%", height: "48px" }} />
           </div>
         </div>
       </div>
@@ -46,11 +52,5 @@ export function LoginPage() {
     signInWithGitHub();
   };
 
-  return (
-    <GitHubAuth
-      onSignIn={handleSignIn}
-      isLoading={isSigningIn}
-      error={reposError}
-    />
-  );
+  return <GitHubAuth onSignIn={handleSignIn} isLoading={isSigningIn} error={reposError} />;
 }

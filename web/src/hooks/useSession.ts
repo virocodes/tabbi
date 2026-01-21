@@ -44,21 +44,19 @@ export interface SessionState {
   isProcessing?: boolean;
   messages: Message[];
   error?: string;
+  selectedModel?: string;
+  provider?: string;
   updatedAt?: number;
 }
 
 interface UseSessionOptions {
-  onStatusChange?: (
-    sessionId: string,
-    status: SessionStatus,
-    isProcessing: boolean
-  ) => void;
+  onStatusChange?: (sessionId: string, status: SessionStatus, isProcessing: boolean) => void;
 }
 
 interface UseSessionResult {
   state: SessionState | null;
   isConnected: boolean;
-  createSession: (repo: string) => Promise<void>;
+  createSession: (repo: string, model: string) => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   clearSession: () => void;
   sendPrompt: (text: string) => void;
@@ -91,6 +89,12 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isReconnectingRef = useRef(false);
+
+  // Debouncing for streaming updates (50ms)
+  const streamingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingStreamingUpdateRef = useRef<{ messageId: string; parts: MessagePart[] } | null>(
+    null
+  );
 
   // Convex mutations
   const createSessionMutation = useMutation(api.sessions.createSession);
@@ -126,7 +130,8 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
 
     // Exponential backoff with jitter
     const delay = Math.min(
-      INITIAL_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttemptsRef.current - 1) + Math.random() * 1000,
+      INITIAL_RECONNECT_DELAY_MS * Math.pow(2, reconnectAttemptsRef.current - 1) +
+        Math.random() * 1000,
       MAX_RECONNECT_DELAY_MS
     );
 
@@ -149,145 +154,169 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
   }, [refreshTokenMutation]);
 
   // Internal WebSocket connection function (used by both initial connect and reconnect)
-  const connectWebSocketInternal = useCallback((sessionId: string, apiToken: string) => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
+  const connectWebSocketInternal = useCallback(
+    (sessionId: string, apiToken: string) => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
 
-    const wsUrl = API_URL.replace(/^http/, "ws");
-    // Pass token via subprotocol
-    const ws = new WebSocket(
-      `${wsUrl}/sessions/${sessionId}/ws`,
-      ["bearer", apiToken]
-    );
+      const wsUrl = API_URL.replace(/^http/, "ws");
+      // Pass token via subprotocol
+      const ws = new WebSocket(`${wsUrl}/sessions/${sessionId}/ws`, ["bearer", apiToken]);
 
-    ws.onopen = () => {
-      setIsConnected(true);
-      setError(null);
-      // Reset reconnection state on successful connect
-      reconnectAttemptsRef.current = 0;
-      isReconnectingRef.current = false;
-      log("WebSocket connected successfully");
-    };
+      ws.onopen = () => {
+        setIsConnected(true);
+        setError(null);
+        // Reset reconnection state on successful connect
+        reconnectAttemptsRef.current = 0;
+        isReconnectingRef.current = false;
+        log("WebSocket connected successfully");
+      };
 
-    ws.onmessage = (event) => {
-      log("WebSocket message received:", event.data);
-      try {
-        const data = JSON.parse(event.data);
-        log("Parsed WebSocket data:", data);
+      ws.onmessage = (event) => {
+        log("WebSocket message received:", event.data);
+        try {
+          const data = JSON.parse(event.data);
+          log("Parsed WebSocket data:", data);
 
-        if (data.type === "state") {
-          log("Setting state, messages:", data.payload?.messages?.length);
-          // Deduplicate messages when receiving state updates
-          const newState = data.payload as SessionState;
-          setState((prev) => {
-            // Only update if WebSocket state is newer (version comparison)
-            if (prev && prev.sessionId === newState.sessionId) {
-              if ((newState.updatedAt || 0) < (prev.updatedAt || 0)) {
-                log("Ignoring stale state update, current:", prev.updatedAt, "received:", newState.updatedAt);
-                return prev;  // Ignore stale update
+          if (data.type === "state") {
+            log("Setting state, messages:", data.payload?.messages?.length);
+            // Deduplicate messages when receiving state updates
+            const newState = data.payload as SessionState;
+            setState((prev) => {
+              // Only update if WebSocket state is newer (version comparison)
+              if (prev && prev.sessionId === newState.sessionId) {
+                if ((newState.updatedAt || 0) < (prev.updatedAt || 0)) {
+                  log(
+                    "Ignoring stale state update, current:",
+                    prev.updatedAt,
+                    "received:",
+                    newState.updatedAt
+                  );
+                  return prev; // Ignore stale update
+                }
               }
+              return {
+                ...newState,
+                messages: deduplicateMessages(newState.messages),
+              };
+            });
+            // Notify about status change
+            if (onStatusChangeRef.current && newState.sessionId) {
+              onStatusChangeRef.current(
+                newState.sessionId,
+                newState.status,
+                newState.isProcessing ?? false
+              );
             }
-            return {
-              ...newState,
-              messages: deduplicateMessages(newState.messages),
-            };
-          });
-          // Notify about status change
-          if (onStatusChangeRef.current && newState.sessionId) {
-            onStatusChangeRef.current(
-              newState.sessionId,
-              newState.status,
-              newState.isProcessing ?? false
-            );
-          }
-        } else if (data.type === "streaming") {
-          // Real-time streaming update for in-progress message
-          const { messageId, parts } = data.payload;
-          log("Streaming update - messageId:", messageId, "parts:", parts?.length);
+          } else if (data.type === "streaming") {
+            // Real-time streaming update for in-progress message
+            const { messageId, parts } = data.payload;
+            log("Streaming update - messageId:", messageId, "parts:", parts?.length);
 
-          // Filter out any empty parts
-          const validParts = (parts || []).filter((p: MessagePart) => {
-            if (p.type === "text") return p.text && p.text.length > 0;
-            if (p.type === "tool") return p.toolCall;
-            return false;
-          });
+            // Filter out any empty parts
+            const validParts = (parts || []).filter((p: MessagePart) => {
+              if (p.type === "text") return p.text && p.text.length > 0;
+              if (p.type === "tool") return p.toolCall;
+              return false;
+            });
 
-          // Don't create/update message if there's no actual content
-          if (validParts.length === 0) {
-            log("Skipping streaming update - no valid parts");
-            return;
-          }
-
-          setState((prev) => {
-            if (!prev) return prev;
-
-            // Check if we already have this message (update it) or need to add it
-            const existingIdx = prev.messages.findIndex(m => m.id === messageId);
-
-            const streamingMessage: Message = {
-              id: messageId,
-              role: "assistant",
-              parts: validParts,
-              timestamp: Date.now(),
-            };
-
-            if (existingIdx >= 0) {
-              // Update existing message
-              const newMessages = [...prev.messages];
-              newMessages[existingIdx] = streamingMessage;
-              return { ...prev, messages: newMessages };
-            } else {
-              // Add new streaming message
-              return { ...prev, messages: [...prev.messages, streamingMessage] };
+            // Don't create/update message if there's no actual content
+            if (validParts.length === 0) {
+              log("Skipping streaming update - no valid parts");
+              return;
             }
-          });
-        } else if (data.type === "event") {
-          log("Event received:", data.payload);
-        } else if (data.type === "error") {
-          logError("Error received:", data.payload);
-          setError(data.payload.message);
+
+            // Store the pending update
+            pendingStreamingUpdateRef.current = { messageId, parts: validParts };
+
+            // Clear any existing debounce timeout
+            if (streamingDebounceRef.current) {
+              clearTimeout(streamingDebounceRef.current);
+            }
+
+            // Debounce the state update by 50ms
+            streamingDebounceRef.current = setTimeout(() => {
+              const pending = pendingStreamingUpdateRef.current;
+              if (!pending) return;
+
+              setState((prev) => {
+                if (!prev) return prev;
+
+                // Check if we already have this message (update it) or need to add it
+                const existingIdx = prev.messages.findIndex((m) => m.id === pending.messageId);
+
+                const streamingMessage: Message = {
+                  id: pending.messageId,
+                  role: "assistant",
+                  parts: pending.parts,
+                  timestamp: Date.now(),
+                };
+
+                if (existingIdx >= 0) {
+                  // Update existing message
+                  const newMessages = [...prev.messages];
+                  newMessages[existingIdx] = streamingMessage;
+                  return { ...prev, messages: newMessages };
+                } else {
+                  // Add new streaming message
+                  return { ...prev, messages: [...prev.messages, streamingMessage] };
+                }
+              });
+
+              pendingStreamingUpdateRef.current = null;
+            }, 50);
+          } else if (data.type === "event") {
+            log("Event received:", data.payload);
+          } else if (data.type === "error") {
+            logError("Error received:", data.payload);
+            setError(data.payload.message);
+          }
+        } catch (err) {
+          logError("Failed to parse WebSocket message:", err);
         }
-      } catch (err) {
-        logError("Failed to parse WebSocket message:", err);
-      }
-    };
+      };
 
-    ws.onclose = (event) => {
-      setIsConnected(false);
-      log("WebSocket closed, code:", event.code, "reason:", event.reason);
+      ws.onclose = (event) => {
+        setIsConnected(false);
+        log("WebSocket closed, code:", event.code, "reason:", event.reason);
 
-      // Only attempt reconnection if:
-      // 1. We have a session ID
-      // 2. The close was not intentional (code 1000 = normal closure)
-      // 3. We're not already reconnecting
-      if (sessionIdRef.current && event.code !== 1000 && !isReconnectingRef.current) {
-        log("Unexpected close, attempting reconnection...");
-        scheduleReconnect();
-      }
-    };
+        // Only attempt reconnection if:
+        // 1. We have a session ID
+        // 2. The close was not intentional (code 1000 = normal closure)
+        // 3. We're not already reconnecting
+        if (sessionIdRef.current && event.code !== 1000 && !isReconnectingRef.current) {
+          log("Unexpected close, attempting reconnection...");
+          scheduleReconnect();
+        }
+      };
 
-    ws.onerror = (event) => {
-      logError("WebSocket error:", event);
-      setError("WebSocket connection error");
-      setIsConnected(false);
-    };
+      ws.onerror = (event) => {
+        logError("WebSocket error:", event);
+        setError("WebSocket connection error");
+        setIsConnected(false);
+      };
 
-    wsRef.current = ws;
-    sessionIdRef.current = sessionId;
-    apiTokenRef.current = apiToken;
-  }, [scheduleReconnect]);
+      wsRef.current = ws;
+      sessionIdRef.current = sessionId;
+      apiTokenRef.current = apiToken;
+    },
+    [scheduleReconnect]
+  );
 
   // Public wrapper that also stores session info for reconnection
-  const connectWebSocket = useCallback((sessionId: string, apiToken: string) => {
-    // Cancel any pending reconnect first
-    cancelReconnect();
-    // Store session info for potential reconnection
-    sessionIdRef.current = sessionId;
-    apiTokenRef.current = apiToken;
-    // Connect
-    connectWebSocketInternal(sessionId, apiToken);
-  }, [connectWebSocketInternal, cancelReconnect]);
+  const connectWebSocket = useCallback(
+    (sessionId: string, apiToken: string) => {
+      // Cancel any pending reconnect first
+      cancelReconnect();
+      // Store session info for potential reconnection
+      sessionIdRef.current = sessionId;
+      apiTokenRef.current = apiToken;
+      // Connect
+      connectWebSocketInternal(sessionId, apiToken);
+    },
+    [connectWebSocketInternal, cancelReconnect]
+  );
 
   // Cleanup on unmount
   useEffect(() => {
@@ -296,13 +325,22 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
       if (wsRef.current) {
         wsRef.current.close();
       }
+      // Clear debounce timeout
+      if (streamingDebounceRef.current) {
+        clearTimeout(streamingDebounceRef.current);
+        streamingDebounceRef.current = null;
+      }
+      pendingStreamingUpdateRef.current = null;
     };
   }, [cancelReconnect]);
 
   // Create a new session via Convex
   const createSession = useCallback(
-    async (repo: string) => {
+    async (repo: string, model: string) => {
       setError(null);
+
+      // Extract provider from model
+      const provider = model.split("/")[0] as "anthropic" | "openai" | "opencode";
 
       // Set loading state immediately
       setState({
@@ -310,13 +348,19 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
         repo,
         status: "starting",
         messages: [],
+        selectedModel: model,
+        provider,
       });
 
       try {
-        log("Creating session for repo:", repo);
+        log("Creating session for repo:", repo, "with model:", model);
 
         // Create session via Convex (returns sessionId + apiToken)
-        const { sessionId, apiToken } = await createSessionMutation({ repo });
+        const { sessionId, apiToken } = await createSessionMutation({
+          repo,
+          selectedModel: model,
+          provider,
+        });
         log("Session created:", sessionId);
 
         // Now call Cloudflare to initialize the DO
@@ -324,9 +368,14 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiToken}`,
+            Authorization: `Bearer ${apiToken}`,
           },
-          body: JSON.stringify({ sessionId, repo }),
+          body: JSON.stringify({
+            sessionId,
+            repo,
+            selectedModel: model,
+            provider,
+          }),
         });
 
         const responseText = await response.text();
@@ -376,7 +425,7 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
 
         const response = await fetch(`${API_URL}/sessions/${sessionId}`, {
           headers: {
-            "Authorization": `Bearer ${apiToken}`,
+            Authorization: `Bearer ${apiToken}`,
           },
         });
 
@@ -384,7 +433,7 @@ export function useSession(options?: UseSessionOptions): UseSessionResult {
           throw new Error("Failed to load session");
         }
 
-        const sessionState = await response.json() as SessionState;
+        const sessionState = (await response.json()) as SessionState;
         log("Loaded session state:", sessionState);
 
         // Deduplicate messages

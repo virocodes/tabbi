@@ -2,15 +2,51 @@
   "name": "inspect-mvp",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
+    "bootstrap": "./scripts/bootstrap.sh",
+    "dev": "concurrently -n convex,cloudflare,web -c blue,yellow,green \"npm run dev:convex\" \"npm run dev:cloudflare\" \"npm run dev:web\"",
     "dev:convex": "convex dev",
     "dev:web": "cd web && npm run dev",
-    "dev:cloudflare": "cd cloudflare && npm run dev"
+    "dev:cloudflare": "cd cloudflare && npm run dev",
+    "typecheck": "npm run typecheck:web && npm run typecheck:cloudflare",
+    "typecheck:web": "cd web && npm run typecheck",
+    "typecheck:cloudflare": "cd cloudflare && npm run typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,json,md}\"",
+    "test": "npm run test:web && npm run test:cloudflare",
+    "test:web": "cd web && npm test",
+    "test:cloudflare": "cd cloudflare && npm test",
+    "test:e2e": "cd web && npm run test:e2e",
+    "prepare": "husky"
   },
   "dependencies": {
     "@convex-dev/better-auth": "^0.10.10",
     "better-auth": "^1.4.9",
     "convex": "^1.31.5",
     "jose": "^6.1.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.11",
+    "prettier": "^3.4.2",
+    "typescript-eslint": "^8.18.2"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,css}": [
+      "prettier --write"
+    ]
   }
 }

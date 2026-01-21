@@ -19,6 +19,7 @@ This guide covers deploying all four components of the tabbi coding agent applic
 ```
 
 **Data Flow:**
+
 1. User authenticates via GitHub OAuth (Convex + Better Auth)
 2. User creates session → Convex stores session, generates API token
 3. Frontend connects to Cloudflare Worker via WebSocket
@@ -29,6 +30,7 @@ This guide covers deploying all four components of the tabbi coding agent applic
 ## Prerequisites
 
 ### Accounts Required
+
 - [Convex](https://convex.dev) - Backend database and auth
 - [Cloudflare](https://cloudflare.com) - Workers and Durable Objects
 - [Modal](https://modal.com) - Sandbox compute
@@ -37,6 +39,7 @@ This guide covers deploying all four components of the tabbi coding agent applic
 - [OpenAI](https://openai.com) - API key for OpenCode
 
 ### Tools Required
+
 ```bash
 # Node.js 18+
 node --version
@@ -77,7 +80,9 @@ Create a GitHub OAuth App for authentication.
    - `Client Secret` → `AUTH_GITHUB_SECRET`
 
 ### 1.2 Required Scopes
+
 The app requests these GitHub scopes:
+
 - `repo` - Full access to repositories (for cloning and pushing)
 - `user:email` - Read user email address
 
@@ -104,11 +109,11 @@ In the [Convex Dashboard](https://dashboard.convex.dev):
 2. Go to Settings → Environment Variables
 3. Add the following:
 
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `SITE_URL` | `https://your-domain.com` | Your production frontend URL |
-| `AUTH_GITHUB_ID` | `Iv1.abc123...` | GitHub OAuth Client ID |
-| `AUTH_GITHUB_SECRET` | `abc123secret...` | GitHub OAuth Client Secret |
+| Variable             | Value                     | Description                  |
+| -------------------- | ------------------------- | ---------------------------- |
+| `SITE_URL`           | `https://your-domain.com` | Your production frontend URL |
+| `AUTH_GITHUB_ID`     | `Iv1.abc123...`           | GitHub OAuth Client ID       |
+| `AUTH_GITHUB_SECRET` | `abc123secret...`         | GitHub OAuth Client Secret   |
 
 ### 2.3 Deploy Convex Functions
 
@@ -119,12 +124,14 @@ npx convex deploy
 ### 2.4 Note Your Convex URLs
 
 After deployment, note these URLs (from Convex Dashboard):
+
 - **Convex URL:** `https://<project>.convex.cloud` → `VITE_CONVEX_URL`
 - **Site URL:** `https://<project>.convex.site` → `VITE_CONVEX_SITE_URL`
 
 ### 2.5 Update GitHub OAuth Callback
 
 Update your GitHub OAuth App's callback URL to:
+
 ```
 https://<project>.convex.site/api/auth/callback/github
 ```
@@ -152,6 +159,7 @@ modal deploy sandbox.py
 ### 3.3 Note Your Modal URLs
 
 After deployment, Modal shows endpoints like:
+
 ```
 https://<username>--coding-agent-sandbox-api-create-sandbox.modal.run
 https://<username>--coding-agent-sandbox-api-pause-sandbox.modal.run
@@ -160,6 +168,7 @@ https://<username>--coding-agent-sandbox-api-terminate-sandbox.modal.run
 ```
 
 The base URL pattern is:
+
 ```
 https://<username>--coding-agent-sandbox
 ```
@@ -215,6 +224,7 @@ wrangler deploy --env production
 ### 4.4 Note Your Worker URL
 
 After deployment, note the worker URL:
+
 ```
 https://coding-agent-api-production.<account>.workers.dev
 ```
@@ -270,6 +280,7 @@ Or connect your GitHub repo to Vercel for automatic deployments.
 
 **Vercel Environment Variables:**
 In Vercel Dashboard → Project Settings → Environment Variables, add:
+
 - `VITE_API_URL`
 - `VITE_CONVEX_URL`
 - `VITE_CONVEX_SITE_URL`
@@ -331,29 +342,33 @@ wrangler tail --env production
 ## Environment Variables Summary
 
 ### Convex Dashboard
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `SITE_URL` | `https://tabbi.app` | Production frontend URL |
-| `AUTH_GITHUB_ID` | `Iv1.abc123` | GitHub OAuth Client ID |
-| `AUTH_GITHUB_SECRET` | `secret123` | GitHub OAuth Client Secret |
+
+| Variable             | Example             | Description                |
+| -------------------- | ------------------- | -------------------------- |
+| `SITE_URL`           | `https://tabbi.app` | Production frontend URL    |
+| `AUTH_GITHUB_ID`     | `Iv1.abc123`        | GitHub OAuth Client ID     |
+| `AUTH_GITHUB_SECRET` | `secret123`         | GitHub OAuth Client Secret |
 
 ### Modal Secrets
-| Secret Name | Variable | Description |
-|-------------|----------|-------------|
+
+| Secret Name  | Variable         | Description                 |
+| ------------ | ---------------- | --------------------------- |
 | `openai-key` | `OPENAI_API_KEY` | OpenAI API key for OpenCode |
 
 ### Cloudflare Workers (wrangler.toml)
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `MODAL_API_URL` | `https://user--coding-agent-sandbox` | Modal endpoints base URL |
-| `CONVEX_SITE_URL` | `https://project.convex.site` | Convex HTTP actions URL |
+
+| Variable          | Example                              | Description              |
+| ----------------- | ------------------------------------ | ------------------------ |
+| `MODAL_API_URL`   | `https://user--coding-agent-sandbox` | Modal endpoints base URL |
+| `CONVEX_SITE_URL` | `https://project.convex.site`        | Convex HTTP actions URL  |
 
 ### Web Frontend (.env.production)
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `VITE_API_URL` | `https://api.tabbi.app` | Cloudflare Worker URL |
-| `VITE_CONVEX_URL` | `https://project.convex.cloud` | Convex client URL |
-| `VITE_CONVEX_SITE_URL` | `https://project.convex.site` | Convex auth URL |
+
+| Variable               | Example                        | Description           |
+| ---------------------- | ------------------------------ | --------------------- |
+| `VITE_API_URL`         | `https://api.tabbi.app`        | Cloudflare Worker URL |
+| `VITE_CONVEX_URL`      | `https://project.convex.cloud` | Convex client URL     |
+| `VITE_CONVEX_SITE_URL` | `https://project.convex.site`  | Convex auth URL       |
 
 ---
 
@@ -369,16 +384,19 @@ wrangler tail --env production
 - [ ] **Set up monitoring** - Error tracking (Sentry), logs, alerts
 
 ### Convex Security
+
 - [ ] Verify all queries check authentication
 - [ ] Verify mutations check authorization (user owns resource)
 - [ ] Token expiration is set (currently 1 hour)
 
 ### Cloudflare Security
+
 - [ ] CORS configured for production domain only
 - [ ] WebSocket connections require valid token
 - [ ] Input validation on all endpoints
 
 ### Modal Security
+
 - [ ] Secrets managed via Modal's secret system
 - [ ] Sandbox timeout configured (10 minutes)
 - [ ] No sensitive data in logs
@@ -403,12 +421,14 @@ modal app logs coding-agent-sandbox
 ### Health Checks
 
 **Cloudflare Worker:**
+
 ```bash
 curl https://your-api.workers.dev/health
 # Should return: {"status":"ok"}
 ```
 
 **Modal Sandbox:**
+
 ```bash
 # Health check happens automatically via Cloudflare Worker
 # Check logs for "OpenCode server is ready!" messages
@@ -417,21 +437,25 @@ curl https://your-api.workers.dev/health
 ### Common Issues
 
 **1. Session stuck in "starting"**
+
 - Check Modal logs for sandbox creation errors
 - Verify OPENAI_API_KEY is set in Modal secrets
 - Check if GitHub token is valid
 
 **2. Authentication fails**
+
 - Verify GitHub OAuth callback URL matches Convex site URL
 - Check AUTH_GITHUB_ID and AUTH_GITHUB_SECRET in Convex
 - Ensure SITE_URL matches your frontend domain
 
 **3. WebSocket connection fails**
+
 - Check CORS configuration in Cloudflare Worker
 - Verify API token is valid (not expired)
 - Check Cloudflare Worker logs for errors
 
 **4. Sandbox times out**
+
 - Sessions auto-pause after 9 minutes of inactivity
 - Resume happens automatically when sending new message
 - Check for snapshot ID in Convex session record
@@ -441,12 +465,14 @@ curl https://your-api.workers.dev/health
 ## Rollback Procedure
 
 ### Convex
+
 ```bash
 # Convex keeps version history
 # Contact Convex support for rollback
 ```
 
 ### Cloudflare
+
 ```bash
 # View deployments
 wrangler deployments list --env production
@@ -456,6 +482,7 @@ wrangler rollback --env production
 ```
 
 ### Modal
+
 ```bash
 # Redeploy previous version from git
 git checkout <previous-commit>
@@ -464,6 +491,7 @@ modal deploy sandbox.py
 ```
 
 ### Frontend (Vercel)
+
 - Go to Vercel Dashboard → Deployments
 - Click "..." on previous deployment → "Promote to Production"
 
@@ -472,19 +500,23 @@ modal deploy sandbox.py
 ## Cost Considerations
 
 ### Convex
+
 - Free tier: 1M function calls/month
 - Paid: $25/month for additional usage
 
 ### Cloudflare Workers
+
 - Free tier: 100k requests/day
 - Paid: $5/month for 10M requests
 
 ### Modal
+
 - Free tier: $30/month credits
 - Pay-as-you-go after credits
 - Sandbox costs: ~$0.001-0.01 per minute depending on resources
 
 ### Vercel
+
 - Free tier: 100GB bandwidth/month
 - Paid: $20/month for teams
 

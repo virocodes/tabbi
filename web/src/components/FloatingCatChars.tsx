@@ -6,7 +6,11 @@ interface FloatingCatCharsProps {
   catScale?: number; // Scale factor for cat size (default 1)
 }
 
-export function FloatingCatChars({ isTyping = false, catPosition, catScale = 1 }: FloatingCatCharsProps) {
+export function FloatingCatChars({
+  isTyping = false,
+  catPosition,
+  catScale = 1,
+}: FloatingCatCharsProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isBlinking, setIsBlinking] = useState(false);
   const [waveFrame, setWaveFrame] = useState(0); // 0 = no wave, 1-4 = wave animation frames
@@ -139,9 +143,7 @@ export function FloatingCatChars({ isTyping = false, catPosition, catScale = 1 }
       const pawGap = 5; // Small gap between body and paw
 
       // Use custom x position or default to center
-      const startX = catPosition
-        ? (width * catPosition.x) - (fullWidth / 2)
-        : (width - fullWidth) / 2;
+      const startX = catPosition ? width * catPosition.x - fullWidth / 2 : (width - fullWidth) / 2;
 
       offCtx.textAlign = "left";
       offCtx.fillText(body, startX, centerY);
@@ -230,9 +232,7 @@ export function FloatingCatChars({ isTyping = false, catPosition, catScale = 1 }
         const dotKey = `${Math.round(x)},${Math.round(y)}`;
         const intensity = getEmoticonIntensity(x, y);
 
-        const distToCursor = Math.sqrt(
-          Math.pow(x - mouse.x, 2) + Math.pow(y - mouse.y, 2)
-        );
+        const distToCursor = Math.sqrt(Math.pow(x - mouse.x, 2) + Math.pow(y - mouse.y, 2));
         const cursorInfluence = Math.max(0, 1 - distToCursor / cursorRadius);
         const targetActivation = cursorInfluence * cursorInfluence * (3 - 2 * cursorInfluence);
 
@@ -267,9 +267,15 @@ export function FloatingCatChars({ isTyping = false, catPosition, catScale = 1 }
         } else {
           dotSize = baseDotSize + currentActivation * (cursorMaxSize - baseDotSize);
           const alpha = 0.1 + currentActivation * 0.2;
-          const r = Math.round(baseColor.r + (accentColor.r - baseColor.r) * currentActivation * 0.5);
-          const g = Math.round(baseColor.g + (accentColor.g - baseColor.g) * currentActivation * 0.5);
-          const b = Math.round(baseColor.b + (accentColor.b - baseColor.b) * currentActivation * 0.5);
+          const r = Math.round(
+            baseColor.r + (accentColor.r - baseColor.r) * currentActivation * 0.5
+          );
+          const g = Math.round(
+            baseColor.g + (accentColor.g - baseColor.g) * currentActivation * 0.5
+          );
+          const b = Math.round(
+            baseColor.b + (accentColor.b - baseColor.b) * currentActivation * 0.5
+          );
           color = `rgba(${r}, ${g}, ${b}, ${alpha})`;
         }
 

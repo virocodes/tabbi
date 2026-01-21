@@ -64,6 +64,10 @@ export default defineSchema({
     errorMessage: v.optional(v.string()),
     // When the sandbox is expected to timeout (for stale session detection)
     sandboxExpiresAt: v.optional(v.number()),
+    selectedModel: v.optional(v.string()),
+    provider: v.optional(
+      v.union(v.literal("anthropic"), v.literal("openai"), v.literal("opencode"))
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -75,11 +79,7 @@ export default defineSchema({
   sessionMessages: defineTable({
     sessionId: v.string(),
     messageId: v.string(),
-    role: v.union(
-      v.literal("user"),
-      v.literal("assistant"),
-      v.literal("system")
-    ),
+    role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")),
     parts: v.array(messagePart),
     timestamp: v.number(),
     createdAt: v.number(),
@@ -97,4 +97,18 @@ export default defineSchema({
   })
     .index("by_tokenHash", ["tokenHash"])
     .index("by_authUserId", ["authUserId"]),
+
+  // User API secrets (encrypted with AES-256-GCM)
+  userSecrets: defineTable({
+    authUserId: v.string(),
+    provider: v.union(v.literal("anthropic"), v.literal("openai")),
+    encryptedKey: v.string(),
+    iv: v.string(),
+    salt: v.string(),
+    algorithm: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_authUserId", ["authUserId"])
+    .index("by_authUserId_provider", ["authUserId", "provider"]),
 });

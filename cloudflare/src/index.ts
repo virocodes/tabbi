@@ -7,7 +7,13 @@
 
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import type { Env, CreateSessionRequest, PromptRequest, SessionResponse, AuthContext } from "./types";
+import type {
+  Env,
+  CreateSessionRequest,
+  PromptRequest,
+  SessionResponse,
+  AuthContext,
+} from "./types";
 import { SessionAgent } from "./agent";
 
 // Export the Durable Object classes
@@ -22,7 +28,7 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // Dynamic CORS middleware using environment variable
 app.use("*", async (c, next) => {
-  const allowedOrigins = c.env.ALLOWED_ORIGINS?.split(",").map(o => o.trim()) || [];
+  const allowedOrigins = c.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) || [];
   const origin = c.req.header("Origin") || "";
 
   // Check if origin is allowed
@@ -66,7 +72,11 @@ function checkRateLimit(userId: string): { allowed: boolean; remaining: number; 
   if (!record || now > record.resetAt) {
     // New window
     rateLimitMap.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - 1, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    return {
+      allowed: true,
+      remaining: RATE_LIMIT_MAX_REQUESTS - 1,
+      resetAt: now + RATE_LIMIT_WINDOW_MS,
+    };
   }
 
   if (record.count >= RATE_LIMIT_MAX_REQUESTS) {
@@ -74,7 +84,11 @@ function checkRateLimit(userId: string): { allowed: boolean; remaining: number; 
   }
 
   record.count++;
-  return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - record.count, resetAt: record.resetAt };
+  return {
+    allowed: true,
+    remaining: RATE_LIMIT_MAX_REQUESTS - record.count,
+    resetAt: record.resetAt,
+  };
 }
 
 /**
@@ -118,7 +132,7 @@ async function authMiddleware(c: any, next: () => Promise<void>) {
       return c.json({ error: "Invalid or expired token" }, 401);
     }
 
-    const { userId, sessionId } = await response.json() as { userId: string; sessionId: string };
+    const { userId, sessionId } = (await response.json()) as { userId: string; sessionId: string };
 
     // Check rate limit
     const rateLimit = checkRateLimit(userId);
@@ -175,6 +189,8 @@ app.post("/sessions", async (c) => {
         userId: auth.userId,
         apiToken: auth.apiToken,
         convexSiteUrl: c.env.CONVEX_SITE_URL,
+        selectedModel: body.selectedModel,
+        provider: body.provider,
       }),
     })
   );

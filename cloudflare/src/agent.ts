@@ -19,14 +19,10 @@ const EXTERNAL_API_TIMEOUT_MS = 30 * 1000;
 // Timeout for Modal sandbox creation (2 minutes - cloning repos can take time)
 const SANDBOX_CREATE_TIMEOUT_MS = 2 * 60 * 1000;
 
-import type {
-  Env,
-  SessionState,
-  Message,
-  MessagePart,
-  OpenCodePart,
-  TrackedPart,
-} from "./types";
+// WebSocket broadcast throttle: max 10 updates/sec (100ms interval)
+const BROADCAST_THROTTLE_MS = 100;
+
+import type { Env, SessionState, Message, MessagePart, OpenCodePart, TrackedPart } from "./types";
 
 // Initialize request now includes auth context
 interface InitializeRequest {
@@ -35,6 +31,8 @@ interface InitializeRequest {
   userId: string;
   apiToken: string;
   convexSiteUrl: string;
+  selectedModel?: string;
+  provider?: string;
 }
 
 export class SessionAgent implements DurableObject {
@@ -45,6 +43,11 @@ export class SessionAgent implements DurableObject {
   // Convex integration - stored after initialization
   private convexSiteUrl: string | null = null;
   private apiToken: string | null = null;
+
+  // Throttling for WebSocket broadcasts
+  private lastBroadcastTime = 0;
+  private pendingBroadcast: { messageId: string; parts: MessagePart[] } | null = null;
+  private broadcastTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Dev-only logging helpers - only log when DEV_MODE is enabled
@@ -126,7 +129,7 @@ export class SessionAgent implements DurableObject {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.apiToken}`,
+        Authorization: `Bearer ${this.apiToken}`,
       },
       signal: AbortSignal.timeout(EXTERNAL_API_TIMEOUT_MS),
     });
@@ -136,10 +139,53 @@ export class SessionAgent implements DurableObject {
       throw new Error(`Failed to fetch GitHub token: ${error}`);
     }
 
-    const { accessToken } = await response.json() as { accessToken: string };
+    const { accessToken } = (await response.json()) as { accessToken: string };
     return accessToken;
   }
 
+  /**
+   * Fetch user API key for a provider from Convex
+   */
+  private async fetchUserApiKey(provider: "anthropic" | "openai"): Promise<string | null> {
+    if (!this.convexSiteUrl || !this.apiToken) {
+      this.log("Convex not configured - skipping API key fetch");
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${this.convexSiteUrl}/api/user-secret`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiToken}`,
+        },
+        body: JSON.stringify({ provider }),
+        signal: AbortSignal.timeout(EXTERNAL_API_TIMEOUT_MS),
+      });
+
+      if (response.status === 404) {
+        // API key not configured for this provider
+        this.log(`No API key configured for provider: ${provider}`);
+        return null;
+      }
+
+      if (!response.ok) {
+        const error = await response.text();
+        this.logError(`Failed to fetch API key for ${provider}: ${error}`);
+        return null;
+      }
+
+      const { apiKey } = (await response.json()) as { apiKey: string };
+      return apiKey;
+    } catch (error) {
+      this.logError(`Error fetching API key for ${provider}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Debug: List available providers and models in OpenCode
+   */
   /**
    * Update session status in Convex (with retry)
    */
@@ -154,7 +200,7 @@ export class SessionAgent implements DurableObject {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${this.apiToken}`,
+          Authorization: `Bearer ${this.apiToken}`,
         },
         body: JSON.stringify({
           sessionId: this.sessionState.sessionId,
@@ -198,8 +244,10 @@ export class SessionAgent implements DurableObject {
         }
 
         const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
-        this.log(`${operationName} failed (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
+        this.log(
+          `${operationName} failed (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms...`
+        );
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
     return null;
@@ -219,7 +267,7 @@ export class SessionAgent implements DurableObject {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${this.apiToken}`,
+          Authorization: `Bearer ${this.apiToken}`,
         },
         body: JSON.stringify({
           sessionId: this.sessionState.sessionId,
@@ -295,10 +343,12 @@ export class SessionAgent implements DurableObject {
       this.state.acceptWebSocket(server);
 
       // Send current state (with streamingMessage merged into messages)
-      server.send(JSON.stringify({
-        type: "state",
-        payload: this.getStateForClient(),
-      }));
+      server.send(
+        JSON.stringify({
+          type: "state",
+          payload: this.getStateForClient(),
+        })
+      );
 
       // If session shows "running", verify sandbox is still alive in the background
       // and send updated state if it's dead
@@ -319,7 +369,7 @@ export class SessionAgent implements DurableObject {
 
     // HTTP endpoints
     if (path === "/initialize" && request.method === "POST") {
-      const body = await request.json() as InitializeRequest;
+      const body = (await request.json()) as InitializeRequest;
       const result = await this.initialize(body);
       return Response.json(result);
     }
@@ -329,7 +379,7 @@ export class SessionAgent implements DurableObject {
     }
 
     if (path === "/prompt" && request.method === "POST") {
-      const body = await request.json() as { text: string };
+      const body = (await request.json()) as { text: string };
       try {
         await this.handlePrompt(body.text);
         return Response.json({ success: true });
@@ -389,16 +439,20 @@ export class SessionAgent implements DurableObject {
           await this.handleStop();
           break;
         default:
-          ws.send(JSON.stringify({
-            type: "error",
-            payload: { message: `Unknown message type: ${data.type}` },
-          }));
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              payload: { message: `Unknown message type: ${data.type}` },
+            })
+          );
       }
     } catch (error) {
-      ws.send(JSON.stringify({
-        type: "error",
-        payload: { message: String(error) },
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          payload: { message: String(error) },
+        })
+      );
     }
   }
 
@@ -466,6 +520,8 @@ export class SessionAgent implements DurableObject {
       sessionId: request.sessionId,
       repo: request.repo,
       userId: request.userId,
+      selectedModel: request.selectedModel,
+      provider: request.provider,
       status: "starting",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -492,12 +548,42 @@ export class SessionAgent implements DurableObject {
       const gitHubToken = await this.fetchGitHubToken();
       this.log("GitHub token fetched, length:", gitHubToken?.length || 0);
 
+      // Fetch API keys for the selected provider
+      let anthropicApiKey: string | null = null;
+      let openaiApiKey: string | null = null;
+
+      if (request.provider === "anthropic") {
+        this.log("Fetching Anthropic API key...");
+        anthropicApiKey = await this.fetchUserApiKey("anthropic");
+        if (anthropicApiKey) {
+          this.log("Anthropic API key fetched");
+        } else {
+          this.log("No Anthropic API key found, models will use default");
+        }
+      } else if (request.provider === "openai") {
+        this.log("Fetching OpenAI API key...");
+        openaiApiKey = await this.fetchUserApiKey("openai");
+        if (openaiApiKey) {
+          this.log("OpenAI API key fetched");
+        } else {
+          this.log("No OpenAI API key found, models will use default");
+        }
+      }
+
       // Call Modal API to create sandbox (longer timeout for repo cloning)
       const modalUrl = this.getModalUrl("api-create-sandbox");
-      const requestBody = {
+      const requestBody: Record<string, unknown> = {
         repo: request.repo,
         pat: gitHubToken,
       };
+
+      // Add API keys to request if available
+      if (anthropicApiKey) {
+        requestBody.anthropic_api_key = anthropicApiKey;
+      }
+      if (openaiApiKey) {
+        requestBody.openai_api_key = openaiApiKey;
+      }
 
       this.log("Calling Modal API:", modalUrl);
       this.log("Request body keys:", Object.keys(requestBody));
@@ -667,7 +753,10 @@ export class SessionAgent implements DurableObject {
     });
 
     this.log("OpenCode session response status:", response.status);
-    this.log("OpenCode session response headers:", JSON.stringify(Object.fromEntries(response.headers.entries())));
+    this.log(
+      "OpenCode session response headers:",
+      JSON.stringify(Object.fromEntries(response.headers.entries()))
+    );
 
     if (!response.ok) {
       const errText = await response.text();
@@ -675,7 +764,7 @@ export class SessionAgent implements DurableObject {
       throw new Error(`Failed to create OpenCode session: ${response.status} ${errText}`);
     }
 
-    const data = await response.json() as { id: string };
+    const data = (await response.json()) as { id: string };
     this.log("OpenCode session created:", data.id);
     return data.id;
   }
@@ -690,7 +779,12 @@ export class SessionAgent implements DurableObject {
       throw new Error("A prompt is already being processed. Please wait for it to complete.");
     }
 
-    this.log("handlePrompt called, status:", this.sessionState.status, "sandboxUrl:", this.sessionState.sandboxUrl);
+    this.log(
+      "handlePrompt called, status:",
+      this.sessionState.status,
+      "sandboxUrl:",
+      this.sessionState.sandboxUrl
+    );
 
     // Add user message to state FIRST (before any resume) so it's included in all broadcasts
     const userMessage: Message = {
@@ -820,23 +914,31 @@ export class SessionAgent implements DurableObject {
       };
 
       // Helper to extract tool call info from a part
-      const extractToolCall = (part: OpenCodePart): { id: string; name: string; arguments: Record<string, unknown>; result?: string; state: 'pending' | 'running' | 'completed' | 'error' } => {
+      const extractToolCall = (
+        part: OpenCodePart
+      ): {
+        id: string;
+        name: string;
+        arguments: Record<string, unknown>;
+        result?: string;
+        state: "pending" | "running" | "completed" | "error";
+      } => {
         const rawState = part.state?.status || part.status || "running";
         // Map OpenCode state to our ToolCall state type
-        const stateMap: Record<string, 'pending' | 'running' | 'completed' | 'error'> = {
-          'pending': 'pending',
-          'running': 'running',
-          'completed': 'completed',
-          'error': 'error',
-          'success': 'completed',
-          'failed': 'error',
+        const stateMap: Record<string, "pending" | "running" | "completed" | "error"> = {
+          pending: "pending",
+          running: "running",
+          completed: "completed",
+          error: "error",
+          success: "completed",
+          failed: "error",
         };
         return {
           id: part.id || part.callID || part.toolCallId || crypto.randomUUID(),
           name: part.tool || part.name || part.toolName || "unknown",
           arguments: part.state?.input || part.input || part.arguments || {},
           result: part.state?.output || part.output || part.result,
-          state: stateMap[rawState] || 'running',
+          state: stateMap[rawState] || "running",
         };
       };
 
@@ -850,8 +952,8 @@ export class SessionAgent implements DurableObject {
       const getPartsInOrder = (): MessagePart[] => {
         return Array.from(partsTracker.values())
           .sort((a, b) => a.firstSeenAt - b.firstSeenAt)
-          .map(t => t.part)
-          .filter(p => {
+          .map((t) => t.part)
+          .filter((p) => {
             if (p.type === "text") return p.text && p.text.length > 0;
             if (p.type === "tool") return p.toolCall;
             return false;
@@ -904,7 +1006,16 @@ export class SessionAgent implements DurableObject {
           const eventIndex = event.properties?.index;
           const messageId = part.messageID || "unknown";
 
-          this.log("Part updated:", part.type, "eventIndex:", eventIndex, "part.id:", part.id, "messageId:", messageId);
+          this.log(
+            "Part updated:",
+            part.type,
+            "eventIndex:",
+            eventIndex,
+            "part.id:",
+            part.id,
+            "messageId:",
+            messageId
+          );
 
           if (part.type === "text" && part.text !== undefined) {
             const textContent = part.text;
@@ -959,7 +1070,6 @@ export class SessionAgent implements DurableObject {
 
             this.broadcastStreamingParts(assistantMessageId, getPartsInOrder());
             saveStreamingProgress();
-
           } else if (isToolPart(part)) {
             // Tool parts reset the current text tracking (text after tool is new)
             currentTextPartId = null;
@@ -967,7 +1077,11 @@ export class SessionAgent implements DurableObject {
             const toolCall = extractToolCall(part);
 
             // For tool parts, use the tool's ID
-            const partId = part.id || part.callID || part.toolCallId || toolCall.id ||
+            const partId =
+              part.id ||
+              part.callID ||
+              part.toolCallId ||
+              toolCall.id ||
               (typeof eventIndex === "number" ? `tool-${eventIndex}` : `tool-${Date.now()}`);
 
             const existing = partsTracker.get(partId);
@@ -1006,10 +1120,33 @@ export class SessionAgent implements DurableObject {
 
       // Send prompt to OpenCode with agentic mode enabled
       this.log("Sending prompt to OpenCode session:", this.sessionState.opencodeSessionId);
-      const requestBody = {
-        agent: "build",  // Enable agentic mode with full tool access
+      this.log(
+        "Session model:",
+        this.sessionState.selectedModel,
+        "provider:",
+        this.sessionState.provider
+      );
+
+      const requestBody: Record<string, unknown> = {
+        agent: "build", // Enable agentic mode with full tool access
         parts: [{ type: "text", text }],
       };
+
+      // Add model configuration per OpenCode docs
+      // Format: { providerID: "anthropic", modelID: "claude-3-5-sonnet-20241022" }
+      if (this.sessionState.selectedModel && this.sessionState.provider) {
+        // Extract model ID from full identifier (e.g., "anthropic/claude-sonnet-4-5-20250929")
+        const modelID =
+          this.sessionState.selectedModel.split("/")[1] || this.sessionState.selectedModel;
+
+        requestBody.model = {
+          providerID: this.sessionState.provider,
+          modelID: modelID,
+        };
+
+        this.log("Using model:", requestBody.model);
+      }
+
       this.log("Request body:", JSON.stringify(requestBody));
 
       const promptRes = await fetch(
@@ -1028,20 +1165,36 @@ export class SessionAgent implements DurableObject {
         throw new Error(`OpenCode error: ${promptRes.status} ${errText}`);
       }
 
+      // Log the response body to debug
+      const promptResponseBody = await promptRes.text();
+      this.log("OpenCode prompt response body:", promptResponseBody);
+
       // Wait for session.idle event (with timeout of 5 minutes)
       this.log("Waiting for session.idle event...");
       const timeoutPromise = new Promise<void>((resolve) => {
-        setTimeout(() => {
-          this.log("Timeout waiting for session.idle after 5 minutes");
-          resolve();
-        }, 5 * 60 * 1000);
+        setTimeout(
+          () => {
+            this.log("Timeout waiting for session.idle after 5 minutes");
+            resolve();
+          },
+          5 * 60 * 1000
+        );
       });
 
       await Promise.race([idlePromise, timeoutPromise]);
       this.log("Session processing complete, sessionIdleReceived:", sessionIdleReceived);
 
+      // Flush any pending broadcast
+      if (this.broadcastTimeout) {
+        clearTimeout(this.broadcastTimeout);
+        this.broadcastTimeout = null;
+      }
+      if (this.pendingBroadcast) {
+        this.executeBroadcast();
+      }
+
       // Give a small buffer for any final events
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       eventController.abort();
 
       // Fetch final messages to ensure we have everything
@@ -1053,13 +1206,13 @@ export class SessionAgent implements DurableObject {
       let finalParts: MessagePart[] = [];
 
       if (messagesRes.ok) {
-        const allMessages = await messagesRes.json() as Array<{
+        const allMessages = (await messagesRes.json()) as Array<{
           info: { id: string; role: string };
           parts: Array<OpenCodePart>;
         }>;
 
         this.log("Fetched messages count:", allMessages.length);
-        const assistantMessages = allMessages.filter(m => m.info.role === "assistant");
+        const assistantMessages = allMessages.filter((m) => m.info.role === "assistant");
         const lastAssistantMessage = assistantMessages[assistantMessages.length - 1];
 
         if (lastAssistantMessage) {
@@ -1085,10 +1238,14 @@ export class SessionAgent implements DurableObject {
       const streamingParts = getPartsInOrder();
 
       // Compare streaming parts vs final fetch
-      const streamingToolCount = streamingParts.filter(p => p.type === "tool").length;
-      const finalToolCount = finalParts.filter(p => p.type === "tool").length;
-      const streamingTextLen = streamingParts.filter(p => p.type === "text").reduce((sum, p) => sum + (p.text?.length || 0), 0);
-      const finalTextLen = finalParts.filter(p => p.type === "text").reduce((sum, p) => sum + (p.text?.length || 0), 0);
+      const streamingToolCount = streamingParts.filter((p) => p.type === "tool").length;
+      const finalToolCount = finalParts.filter((p) => p.type === "tool").length;
+      const streamingTextLen = streamingParts
+        .filter((p) => p.type === "text")
+        .reduce((sum, p) => sum + (p.text?.length || 0), 0);
+      const finalTextLen = finalParts
+        .filter((p) => p.type === "text")
+        .reduce((sum, p) => sum + (p.text?.length || 0), 0);
       this.log("Streaming - tools:", streamingToolCount, "textLen:", streamingTextLen);
       this.log("Final - tools:", finalToolCount, "textLen:", finalTextLen);
 
@@ -1114,7 +1271,7 @@ export class SessionAgent implements DurableObject {
       this.sessionState = {
         ...this.sessionState,
         messages: [...this.sessionState.messages, assistantMessage],
-        streamingMessage: undefined,  // Clear - now saved in messages
+        streamingMessage: undefined, // Clear - now saved in messages
         isProcessing: false,
         updatedAt: Date.now(),
       };
@@ -1126,21 +1283,25 @@ export class SessionAgent implements DurableObject {
 
       // Reset auto-pause timer after activity
       await this.scheduleAutoPause();
-
     } catch (error) {
       this.logError("OpenCode error:", error);
 
       const errorMessage: Message = {
         id: crypto.randomUUID(),
         role: "system",
-        parts: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        parts: [
+          {
+            type: "text",
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
         timestamp: Date.now(),
       };
 
       this.sessionState = {
         ...this.sessionState,
         messages: [...this.sessionState.messages, errorMessage],
-        streamingMessage: undefined,  // Clear on error
+        streamingMessage: undefined, // Clear on error
         isProcessing: false,
         updatedAt: Date.now(),
       };
@@ -1207,22 +1368,54 @@ export class SessionAgent implements DurableObject {
    * Broadcast streaming parts for an in-progress message
    * Parts are already deduplicated by unique part ID from partsTracker
    */
-  private broadcastStreamingParts(
-    messageId: string,
-    parts: MessagePart[]
-  ): void {
+  /**
+   * Throttled broadcast for streaming parts (max 10 updates/sec)
+   * Batches updates within 100ms window to reduce WebSocket message frequency
+   */
+  private broadcastStreamingParts(messageId: string, parts: MessagePart[]): void {
     // Only broadcast if there's actual content to show
     if (parts.length === 0) {
       return;
     }
 
+    const now = Date.now();
+    const timeSinceLastBroadcast = now - this.lastBroadcastTime;
+
+    // Store the latest update
+    this.pendingBroadcast = { messageId, parts };
+
+    // If enough time has passed, broadcast immediately
+    if (timeSinceLastBroadcast >= BROADCAST_THROTTLE_MS) {
+      this.executeBroadcast();
+      return;
+    }
+
+    // Otherwise, schedule a broadcast for later (if not already scheduled)
+    if (!this.broadcastTimeout) {
+      const delay = BROADCAST_THROTTLE_MS - timeSinceLastBroadcast;
+      this.broadcastTimeout = setTimeout(() => {
+        this.executeBroadcast();
+      }, delay);
+    }
+  }
+
+  /**
+   * Execute the actual broadcast and clear pending state
+   */
+  private executeBroadcast(): void {
+    if (!this.pendingBroadcast) return;
+
     this.broadcast({
       type: "streaming",
       payload: {
-        messageId,
-        parts,
+        messageId: this.pendingBroadcast.messageId,
+        parts: this.pendingBroadcast.parts,
       },
     });
+
+    this.lastBroadcastTime = Date.now();
+    this.pendingBroadcast = null;
+    this.broadcastTimeout = null;
   }
 
   /**
@@ -1236,7 +1429,9 @@ export class SessionAgent implements DurableObject {
     // GUARD: Don't pause during active processing (P0-4)
     // Snapshot during execution can create inconsistent state
     if (this.sessionState.isProcessing) {
-      throw new Error("Cannot pause while processing a prompt. Please wait for completion or stop the session.");
+      throw new Error(
+        "Cannot pause while processing a prompt. Please wait for completion or stop the session."
+      );
     }
 
     // Cancel auto-pause alarm since we're manually pausing
@@ -1362,6 +1557,7 @@ export class SessionAgent implements DurableObject {
       // Create a new OpenCode session after resume
       this.log("Creating new OpenCode session after resume...");
       const opencodeSessionId = await this.createOpenCodeSession(result.tunnel_url!);
+      this.log("OpenCode session created, API keys will be loaded from saved environment");
 
       this.sessionState = {
         ...this.sessionState,

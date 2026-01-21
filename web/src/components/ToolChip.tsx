@@ -86,10 +86,7 @@ export function ToolChip({ tool }: ToolChipProps) {
         >
           <div className="tool-chip-popover-header">
             <span className="tool-chip-popover-title">{tool.name}</span>
-            <button
-              onClick={() => setShowPopover(false)}
-              className="tool-chip-popover-close"
-            >
+            <button onClick={() => setShowPopover(false)} className="tool-chip-popover-close">
               ×
             </button>
           </div>

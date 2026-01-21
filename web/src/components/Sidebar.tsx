@@ -122,7 +122,16 @@ export function Sidebar({
       </div>
 
       <button className="new-session-btn" onClick={onNewSession}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
@@ -141,9 +150,7 @@ export function Sidebar({
       <div className="sidebar-sessions">
         {filteredSessions.length === 0 ? (
           <div className="sidebar-empty">
-            {sessions.length === 0
-              ? "No sessions yet"
-              : "No matching sessions"}
+            {sessions.length === 0 ? "No sessions yet" : "No matching sessions"}
           </div>
         ) : (
           filteredSessions.map((session) => (
@@ -168,7 +175,16 @@ export function Sidebar({
                 onClick={(e) => openDeleteConfirm(session, e)}
                 title="Delete session"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
                 </svg>
@@ -201,7 +217,7 @@ export function Sidebar({
             </div>
             <div className="modal-body">
               <p>Are you sure you want to delete this session?</p>
-              <p className="modal-session-title">"{deleteConfirm.sessionTitle}"</p>
+              <p className="modal-session-title">&quot;{deleteConfirm.sessionTitle}&quot;</p>
             </div>
             <div className="modal-actions">
               <button className="modal-btn modal-btn-cancel" onClick={closeDeleteConfirm}>

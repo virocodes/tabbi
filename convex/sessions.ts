@@ -48,6 +48,10 @@ export const getSession = query({
 export const createSession = mutation({
   args: {
     repo: v.string(),
+    selectedModel: v.optional(v.string()),
+    provider: v.optional(
+      v.union(v.literal("anthropic"), v.literal("openai"), v.literal("opencode"))
+    ),
   },
   handler: async (ctx, args) => {
     const authUser = await authComponent.getAuthUser(ctx);
@@ -61,6 +65,8 @@ export const createSession = mutation({
       authUserId: String(authUser._id),
       sessionId,
       repo: args.repo,
+      selectedModel: args.selectedModel,
+      provider: args.provider,
       status: "starting",
       isProcessing: false,
       createdAt: Date.now(),
@@ -238,10 +244,7 @@ export const checkSessionExpired = internalMutation({
     // Only mark as stale if:
     // 1. Session is still "running"
     // 2. The sandboxExpiresAt matches what we expected (hasn't been refreshed)
-    if (
-      session.status === "running" &&
-      session.sandboxExpiresAt === args.expectedExpiresAt
-    ) {
+    if (session.status === "running" && session.sandboxExpiresAt === args.expectedExpiresAt) {
       const newStatus = session.snapshotId ? "paused" : "idle";
       await ctx.db.patch(session._id, {
         status: newStatus,

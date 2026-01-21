@@ -1,0 +1,8 @@
+node_modules
+dist
+.wrangler
+convex/_generated
+*.min.js
+*.min.css
+package-lock.json
+pnpm-lock.yaml

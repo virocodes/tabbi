@@ -10,11 +10,14 @@
 
 import type * as auth from "../auth.js";
 import type * as crons from "../crons.js";
+import type * as debug from "../debug.js";
 import type * as github from "../github.js";
 import type * as http from "../http.js";
+import type * as lib_encryption from "../lib/encryption.js";
 import type * as messages from "../messages.js";
 import type * as sessions from "../sessions.js";
 import type * as tokens from "../tokens.js";
+import type * as userSecrets from "../userSecrets.js";
 import type * as users from "../users.js";
 
 import type {
@@ -26,11 +29,14 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   crons: typeof crons;
+  debug: typeof debug;
   github: typeof github;
   http: typeof http;
+  "lib/encryption": typeof lib_encryption;
   messages: typeof messages;
   sessions: typeof sessions;
   tokens: typeof tokens;
+  userSecrets: typeof userSecrets;
   users: typeof users;
 }>;
 

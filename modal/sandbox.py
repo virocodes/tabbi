@@ -79,13 +79,20 @@ sandbox_image = (
 
 
 @app.function()
-async def create_sandbox(repo: str, pat: str) -> dict:
+async def create_sandbox(
+    repo: str,
+    pat: str,
+    anthropic_api_key: str | None = None,
+    openai_api_key: str | None = None
+) -> dict:
     """
     Create a new sandbox with the repository cloned and OpenCode server running.
 
     Args:
         repo: GitHub repository in format "owner/repo"
         pat: GitHub Personal Access Token for cloning
+        anthropic_api_key: Optional Anthropic API key for Claude models
+        openai_api_key: Optional OpenAI API key for GPT models
 
     Returns:
         dict with sandbox_id and tunnel_url
@@ -213,16 +220,57 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     print(f"[8/10] Config file created: {config_result.stdout.read()[:100]}...")
 
     # Start OpenCode server in the background
-    # Write GH_TOKEN to a secure environment file (not visible in ps aux)
+    # Write GH_TOKEN and API keys to a secure environment file (not visible in ps aux)
     print("[9/10] Starting OpenCode server...")
-    sb.exec(
+
+    # Write each environment variable separately to avoid quoting issues
+    sb.exec("sh", "-c", f"umask 077 && echo 'export GH_TOKEN=\"{pat}\"' > /root/.opencode-env").wait()
+
+    if anthropic_api_key:
+        print("[9/10] Adding Anthropic API key to environment")
+        sb.exec("sh", "-c", f"echo 'export ANTHROPIC_API_KEY=\"{anthropic_api_key}\"' >> /root/.opencode-env").wait()
+
+    if openai_api_key:
+        print("[9/10] Adding OpenAI API key to environment")
+        sb.exec("sh", "-c", f"echo 'export OPENAI_API_KEY=\"{openai_api_key}\"' >> /root/.opencode-env").wait()
+
+    # Verify the environment file was created correctly
+    verify_env = sb.exec("sh", "-c", "wc -l /root/.opencode-env && head -1 /root/.opencode-env")
+    verify_env.wait()
+    env_output = verify_env.stdout.read()
+    if isinstance(env_output, bytes):
+        env_output = env_output.decode("utf-8")
+    print(f"[9/10] Environment file: {env_output.strip()}")
+
+    # Verify opencode is installed and check version
+    print("[9/10] Verifying OpenCode installation...")
+    version_result = sb.exec("sh", "-c", "which opencode && opencode --version 2>&1")
+    version_result.wait()
+    version_output = version_result.stdout.read()
+    if isinstance(version_output, bytes):
+        version_output = version_output.decode("utf-8")
+    print(f"[9/10] OpenCode location and version: {version_output.strip()}")
+
+    # Start OpenCode server
+    print("[9/10] Launching OpenCode server...")
+    # First test if the command works by running it in the foreground briefly
+    test_result = sb.exec(
         "sh", "-c",
-        f"umask 077 && echo 'export GH_TOKEN=\"{pat}\"' > /root/.opencode-env"
-    ).wait()
-    sb.exec(
+        "cd /workspace && . /root/.opencode-env && timeout 1 opencode serve --port 4096 --hostname 0.0.0.0 2>&1 || true"
+    )
+    test_result.wait()
+    test_output = test_result.stdout.read()
+    if isinstance(test_output, bytes):
+        test_output = test_output.decode("utf-8")
+    print(f"[9/10] OpenCode startup test: {test_output[:300] if test_output else 'no output'}")
+
+    # Now start it in the background
+    start_result = sb.exec(
         "sh", "-c",
-        "cd /workspace && . /root/.opencode-env && opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
-    ).wait()
+        "cd /workspace && . /root/.opencode-env && nohup opencode serve --port 4096 --hostname 0.0.0.0 > /tmp/opencode.log 2>&1 &"
+    )
+    start_result.wait()
+    print(f"[9/10] OpenCode start command exit code: {start_result.returncode}")
 
     # Give the server time to start
     print("[9/10] Waiting for server to start (5 seconds)...")
@@ -232,13 +280,31 @@ async def create_sandbox(repo: str, pat: str) -> dict:
     print("[9/10] Checking OpenCode status...")
     ps_result = sb.exec("sh", "-c", "ps aux | grep opencode || echo 'No opencode process found'")
     ps_result.wait()
-    ps_output = ps_result.stdout.read().strip()
+    ps_output = ps_result.stdout.read()
+    if isinstance(ps_output, bytes):
+        ps_output = ps_output.decode("utf-8").strip()
     print(f"[9/10] Processes: {ps_output}")
 
-    log_result = sb.exec("sh", "-c", "cat /tmp/opencode.log 2>/dev/null || echo 'No log file yet'")
+    # Get both stdout and stderr logs
+    log_result = sb.exec("sh", "-c", "cat /tmp/opencode.log 2>&1 || echo 'No log file yet'")
     log_result.wait()
-    log_output = log_result.stdout.read().strip()
-    print(f"[9/10] OpenCode log: {log_output[:500] if log_output else 'empty'}")
+    log_output = log_result.stdout.read()
+    if isinstance(log_output, bytes):
+        log_output = log_output.decode("utf-8").strip()
+
+    if log_output and log_output != 'No log file yet':
+        print(f"[9/10] OpenCode log output:")
+        print(log_output[:1000])  # Print more log output for debugging
+    else:
+        print(f"[9/10] No OpenCode log output yet")
+        # Try to see if there was an error starting it
+        stderr_result = sb.exec("sh", "-c", "cat /tmp/opencode.log 2>&1")
+        stderr_result.wait()
+        stderr_output = stderr_result.stdout.read()
+        if isinstance(stderr_output, bytes):
+            stderr_output = stderr_output.decode("utf-8")
+        if stderr_output:
+            print(f"[9/10] Stderr: {stderr_output[:500]}")
 
     # Test health endpoint locally
     print("[9/10] Testing health endpoint locally...")
@@ -522,8 +588,14 @@ async def api_create_sandbox(body: dict) -> dict:
 
     repo = body.get("repo") if isinstance(body, dict) else None
     pat = body.get("pat") if isinstance(body, dict) else None
+    anthropic_api_key = body.get("anthropic_api_key") if isinstance(body, dict) else None
+    openai_api_key = body.get("openai_api_key") if isinstance(body, dict) else None
 
     print(f"[api_create_sandbox] Parsed: repo={repo}, pat={'[SET]' if pat else 'None'}")
+    if anthropic_api_key:
+        print(f"[api_create_sandbox] Anthropic API key provided")
+    if openai_api_key:
+        print(f"[api_create_sandbox] OpenAI API key provided")
 
     if not repo or not pat:
         print(f"[api_create_sandbox] Missing parameters")
@@ -531,7 +603,12 @@ async def api_create_sandbox(body: dict) -> dict:
 
     print(f"[api_create_sandbox] Calling create_sandbox for repo: {repo}")
     try:
-        result = await create_sandbox.remote.aio(repo=repo, pat=pat)
+        result = await create_sandbox.remote.aio(
+            repo=repo,
+            pat=pat,
+            anthropic_api_key=anthropic_api_key,
+            openai_api_key=openai_api_key
+        )
         print(f"[api_create_sandbox] create_sandbox returned: {result}")
         return result
     except Exception as e:

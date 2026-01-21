@@ -1,11 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Routes, Route, useNavigate, useParams, Navigate, useSearchParams } from "react-router-dom";
+import { useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import { useAuth } from "./hooks/useAuth";
 import { useSessions } from "./hooks/useSessions";
 import { useSession } from "./hooks/useSession";
 import { Sidebar } from "./components/Sidebar";
 import { HomePage } from "./components/HomePage";
 import { Chat } from "./components/Chat";
+import { ApiKeySettingsModal } from "./components/ApiKeySettingsModal";
+import { DEFAULT_MODEL } from "./lib/models";
 
 function AppContent() {
   const navigate = useNavigate();
@@ -24,14 +28,15 @@ function AppContent() {
     signOut,
   } = useAuth();
 
-  const {
-    sessions,
-    deleteSession,
-  } = useSessions();
+  const { sessions, deleteSession } = useSessions();
 
   // Callback to update sidebar session status in real-time
   const handleStatusChange = useCallback(
-    (_sessionId: string, _status: "idle" | "starting" | "running" | "paused" | "error", _isProcessing: boolean) => {
+    (
+      _sessionId: string,
+      _status: "idle" | "starting" | "running" | "paused" | "error",
+      _isProcessing: boolean
+    ) => {
       // Sessions are now real-time from Convex, no need to manually update
     },
     []
@@ -56,6 +61,16 @@ function AppContent() {
 
   // Track if we've loaded the session from URL
   const loadedSessionRef = useRef<string | null>(null);
+
+  // Model selection state
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL.id);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [initialProvider, setInitialProvider] = useState<"anthropic" | "openai">("anthropic");
+
+  // Query configured providers
+  const configuredProvidersData = useQuery(api.userSecrets.listConfiguredProviders);
+  const configuredProviders =
+    configuredProvidersData?.map((p) => p.provider as "anthropic" | "openai") || [];
 
   // Load session from URL on mount or when URL changes
   useEffect(() => {
@@ -104,41 +119,50 @@ function AppContent() {
   }, [signOut, navigate]);
 
   // Start session when user begins typing (preemptive startup)
-  const handleStartTyping = useCallback(async (repo: string) => {
-    if (!isAuthenticated) return;
-    // Only start if we don't already have a session starting/running
-    if (sessionState?.status === "starting" || sessionState?.status === "running") return;
+  const handleStartTyping = useCallback(
+    async (repo: string, model: string) => {
+      if (!isAuthenticated) return;
+      // Only start if we don't already have a session starting/running
+      if (sessionState?.status === "starting" || sessionState?.status === "running") return;
 
-    setStartupPhase("Creating sandbox...");
-    setSessionReady(false);
-    await createSession(repo);
-  }, [isAuthenticated, sessionState?.status, createSession]);
+      setStartupPhase("Creating sandbox...");
+      setSessionReady(false);
+      await createSession(repo, model);
+    },
+    [isAuthenticated, sessionState?.status, createSession]
+  );
 
   // Handle message submission
-  const handleSubmitMessage = useCallback((message: string) => {
-    if (!sessionState?.sessionId) return;
+  const handleSubmitMessage = useCallback(
+    (message: string) => {
+      if (!sessionState?.sessionId) return;
 
-    // Navigate to the session page when user submits
-    if (sessionState.sessionId !== urlSessionId) {
-      navigate(`/app/session/${sessionState.sessionId}`, { replace: true });
-    }
+      // Navigate to the session page when user submits
+      if (sessionState.sessionId !== urlSessionId) {
+        navigate(`/app/session/${sessionState.sessionId}`, { replace: true });
+      }
 
-    if (sessionReady && isConnected) {
-      // Session is ready - send immediately
-      sendPrompt(message);
-    } else {
-      // Session not ready - store message for this specific session
-      pendingMessagesRef.current.set(sessionState.sessionId, message);
-      setCurrentPendingMessage(message);
-    }
-  }, [sessionReady, isConnected, sessionState?.sessionId, urlSessionId, navigate, sendPrompt]);
+      if (sessionReady && isConnected) {
+        // Session is ready - send immediately
+        sendPrompt(message);
+      } else {
+        // Session not ready - store message for this specific session
+        pendingMessagesRef.current.set(sessionState.sessionId, message);
+        setCurrentPendingMessage(message);
+      }
+    },
+    [sessionReady, isConnected, sessionState?.sessionId, urlSessionId, navigate, sendPrompt]
+  );
 
-  const handleSelectSession = useCallback(async (sessionId: string) => {
-    // Restore pending message for this session if any
-    const pendingMsg = pendingMessagesRef.current.get(sessionId);
-    setCurrentPendingMessage(pendingMsg || null);
-    navigate(`/app/session/${sessionId}`);
-  }, [navigate]);
+  const handleSelectSession = useCallback(
+    async (sessionId: string) => {
+      // Restore pending message for this session if any
+      const pendingMsg = pendingMessagesRef.current.get(sessionId);
+      setCurrentPendingMessage(pendingMsg || null);
+      navigate(`/app/session/${sessionId}`);
+    },
+    [navigate]
+  );
 
   const handleNewSession = useCallback(() => {
     clearSession();
@@ -149,17 +173,29 @@ function AppContent() {
     navigate("/app");
   }, [clearSession, navigate]);
 
-  const handleDeleteSession = useCallback(async (sessionId: string) => {
-    // Clean up pending message for this session
-    pendingMessagesRef.current.delete(sessionId);
+  const handleDeleteSession = useCallback(
+    async (sessionId: string) => {
+      // Clean up pending message for this session
+      pendingMessagesRef.current.delete(sessionId);
 
-    await deleteSession(sessionId);
-    // If we deleted the active session, go back to home
-    if (sessionId === urlSessionId) {
-      setCurrentPendingMessage(null);
-      navigate("/app");
-    }
-  }, [deleteSession, urlSessionId, navigate]);
+      await deleteSession(sessionId);
+      // If we deleted the active session, go back to home
+      if (sessionId === urlSessionId) {
+        setCurrentPendingMessage(null);
+        navigate("/app");
+      }
+    },
+    [deleteSession, urlSessionId, navigate]
+  );
+
+  const handleModelChange = useCallback((modelId: string) => {
+    setSelectedModel(modelId);
+  }, []);
+
+  const handleConfigureKey = useCallback((provider: "anthropic" | "openai") => {
+    setInitialProvider(provider);
+    setIsSettingsOpen(true);
+  }, []);
 
   // Show skeleton while auth is initializing OR processing OAuth callback (but not yet authenticated)
   if (isAuthLoading || (isOAuthCallback && !isAuthenticated)) {
@@ -167,13 +203,16 @@ function AppContent() {
       <div className="app-layout">
         <div className="sidebar skeleton-sidebar">
           <div className="sidebar-header">
-            <div className="skeleton-box" style={{ width: '120px', height: '24px' }} />
+            <div className="skeleton-box" style={{ width: "120px", height: "24px" }} />
           </div>
           <div className="sidebar-sessions">
             {[1, 2, 3].map((i) => (
               <div key={i} className="skeleton-session-item">
-                <div className="skeleton-box" style={{ width: '100%', height: '16px', marginBottom: '8px' }} />
-                <div className="skeleton-box" style={{ width: '60%', height: '12px' }} />
+                <div
+                  className="skeleton-box"
+                  style={{ width: "100%", height: "16px", marginBottom: "8px" }}
+                />
+                <div className="skeleton-box" style={{ width: "60%", height: "12px" }} />
               </div>
             ))}
           </div>
@@ -183,8 +222,14 @@ function AppContent() {
         </div>
         <div className="main-content">
           <div className="skeleton-main">
-            <div className="skeleton-box" style={{ width: '200px', height: '32px', marginBottom: '24px' }} />
-            <div className="skeleton-box" style={{ width: '100%', maxWidth: '600px', height: '48px' }} />
+            <div
+              className="skeleton-box"
+              style={{ width: "200px", height: "32px", marginBottom: "24px" }}
+            />
+            <div
+              className="skeleton-box"
+              style={{ width: "100%", maxWidth: "600px", height: "48px" }}
+            />
           </div>
         </div>
       </div>
@@ -203,7 +248,7 @@ function AppContent() {
   return (
     <div className="app-layout">
       <Sidebar
-        sessions={sessions.map(s => ({
+        sessions={sessions.map((s) => ({
           sessionId: s.sessionId,
           repo: s.repo,
           firstMessage: s.title,
@@ -223,6 +268,30 @@ function AppContent() {
       <div className="main-content">
         {sessionError && <div className="error-banner">{sessionError}</div>}
 
+        {/* Settings button (fixed position) - only show on home page */}
+        {!isSessionView && (
+          <button
+            className="settings-button"
+            onClick={() => setIsSettingsOpen(true)}
+            title="API Key Settings"
+            aria-label="API Key Settings"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+        )}
+
         {!isSessionView ? (
           <HomePage
             repos={repos}
@@ -231,6 +300,10 @@ function AppContent() {
             isReady={sessionReady}
             isPendingSubmit={currentPendingMessage !== null}
             startupPhase={startupPhase}
+            selectedModel={selectedModel}
+            configuredProviders={configuredProviders}
+            onModelChange={handleModelChange}
+            onConfigureKey={handleConfigureKey}
             onStartTyping={handleStartTyping}
             onSubmitMessage={handleSubmitMessage}
           />
@@ -244,6 +317,19 @@ function AppContent() {
             startupPhase={startupPhase}
           />
         )}
+
+        {/* API Key Settings Modal */}
+        <ApiKeySettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          initialProvider={initialProvider}
+          configuredProviders={
+            configuredProvidersData?.map((p) => ({
+              provider: p.provider as "anthropic" | "openai",
+              updatedAt: p.updatedAt,
+            })) || []
+          }
+        />
       </div>
     </div>
   );

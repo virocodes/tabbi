@@ -29,18 +29,15 @@ http.route({
       });
 
       if (!validation?.valid) {
-        return new Response(
-          JSON.stringify({ error: "Invalid or expired token" }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
+        return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       return new Response(
         JSON.stringify({
-          userId: validation.authUserId,  // Cloudflare expects 'userId'
+          userId: validation.authUserId, // Cloudflare expects 'userId'
           sessionId: validation.sessionId,
         }),
         {
@@ -49,13 +46,10 @@ http.route({
         }
       );
     } catch (error) {
-      return new Response(
-        JSON.stringify({ error: "Internal server error" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
     }
   }),
 });
@@ -81,13 +75,10 @@ http.route({
       });
 
       if (!validation?.valid) {
-        return new Response(
-          JSON.stringify({ error: "Invalid or expired token" }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
+        return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       // Get GitHub token (from Better Auth accounts table)
@@ -132,35 +123,28 @@ http.route({
       });
 
       if (!validation?.valid) {
-        return new Response(
-          JSON.stringify({ error: "Invalid or expired token" }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
+        return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       const body = await request.json();
-      const { sessionId, status, isProcessing, title, snapshotId, errorMessage } =
-        body as {
-          sessionId: string;
-          status?: string;
-          isProcessing?: boolean;
-          title?: string;
-          snapshotId?: string;
-          errorMessage?: string;
-        };
+      const { sessionId, status, isProcessing, title, snapshotId, errorMessage } = body as {
+        sessionId: string;
+        status?: string;
+        isProcessing?: boolean;
+        title?: string;
+        snapshotId?: string;
+        errorMessage?: string;
+      };
 
       // Verify sessionId matches token
       if (sessionId !== validation.sessionId) {
-        return new Response(
-          JSON.stringify({ error: "Session ID mismatch" }),
-          {
-            status: 403,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
+        return new Response(JSON.stringify({ error: "Session ID mismatch" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       // Convert null values to undefined (Convex doesn't accept null for optional fields)
@@ -210,13 +194,10 @@ http.route({
       });
 
       if (!validation?.valid) {
-        return new Response(
-          JSON.stringify({ error: "Invalid or expired token" }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
+        return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       const body = await request.json();
@@ -230,13 +211,10 @@ http.route({
 
       // Verify sessionId matches token
       if (sessionId !== validation.sessionId) {
-        return new Response(
-          JSON.stringify({ error: "Session ID mismatch" }),
-          {
-            status: 403,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
+        return new Response(JSON.stringify({ error: "Session ID mismatch" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       await ctx.runMutation(internal.messages.syncMessage, {
@@ -256,6 +234,70 @@ http.route({
       console.error("Message sync error:", error);
       // Return generic error to client to avoid leaking implementation details
       return new Response(JSON.stringify({ error: "Failed to sync message" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }),
+});
+
+// Get user secret (API key) endpoint (called by Cloudflare Worker)
+http.route({
+  path: "/api/user-secret",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      // Validate API token from Authorization header
+      const authHeader = request.headers.get("Authorization");
+      if (!authHeader?.startsWith("Bearer ")) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const token = authHeader.slice(7);
+      const validation = await ctx.runQuery(internal.tokens.validateApiToken, {
+        token,
+      });
+
+      if (!validation?.valid) {
+        return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const body = await request.json();
+      const { provider } = body as { provider: "anthropic" | "openai" };
+
+      if (!provider) {
+        return new Response(JSON.stringify({ error: "Missing provider" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      // Get decrypted API key for the user and provider
+      const apiKey = await ctx.runQuery(internal.userSecrets.getDecryptedKey, {
+        authUserId: validation.authUserId,
+        provider,
+      });
+
+      if (!apiKey) {
+        return new Response(JSON.stringify({ error: "API key not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ apiKey }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      console.error("User secret fetch error:", error);
+      return new Response(JSON.stringify({ error: "Failed to retrieve API key" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });

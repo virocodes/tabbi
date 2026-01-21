@@ -34,10 +34,7 @@ export function useAuth(): UseAuthResult {
   const { isAuthenticated, isLoading } = useConvexAuth();
 
   // Get user profile from Convex
-  const user = useQuery(
-    api.users.getCurrentUser,
-    isAuthenticated ? {} : "skip"
-  );
+  const user = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : "skip");
 
   // Fetch repos action
   const fetchRepos = useAction(api.github.fetchUserRepos);

@@ -6,12 +6,9 @@
  * - Modal sandbox lifecycle (create, pause, resume, terminate)
  * - OpenCode server communication
  * - WebSocket connections for real-time updates
- * - Auto-pause via alarms before Modal sandbox timeout
+ * - Auto-snapshot after message completion for seamless resume
  * - Convex integration for auth, session status, and message syncing
  */
-
-// Auto-pause timeout: 9 minutes (before Modal's 10 minute timeout)
-const AUTO_PAUSE_TIMEOUT_MS = 9 * 60 * 1000;
 
 // Timeout for external API calls (30 seconds)
 const EXTERNAL_API_TIMEOUT_MS = 30 * 1000;
@@ -464,46 +461,6 @@ export class SessionAgent implements DurableObject {
   }
 
   /**
-   * Handle Durable Object alarm - auto-pause before Modal timeout
-   */
-  async alarm(): Promise<void> {
-    this.log("Alarm triggered - checking if auto-pause needed");
-
-    // Only auto-pause if sandbox is running
-    if (this.sessionState.status === "running" && this.sessionState.sandboxId) {
-      this.log("Auto-pausing sandbox before timeout...");
-      try {
-        await this.handlePause();
-        this.log("Auto-pause successful");
-      } catch (error) {
-        this.logError("Auto-pause failed:", error);
-        // If pause fails, the sandbox may timeout anyway - nothing we can do
-      }
-    } else {
-      this.log("Skipping auto-pause - status:", this.sessionState.status);
-    }
-  }
-
-  /**
-   * Schedule auto-pause alarm (resets any existing alarm)
-   */
-  private async scheduleAutoPause(): Promise<void> {
-    if (this.sessionState.status === "running") {
-      const alarmTime = Date.now() + AUTO_PAUSE_TIMEOUT_MS;
-      await this.state.storage.setAlarm(alarmTime);
-      this.log("Auto-pause alarm scheduled for", new Date(alarmTime).toISOString());
-    }
-  }
-
-  /**
-   * Cancel auto-pause alarm
-   */
-  private async cancelAutoPause(): Promise<void> {
-    await this.state.storage.deleteAlarm();
-    this.log("Auto-pause alarm cancelled");
-  }
-
-  /**
    * Initialize a new session with a repository
    * Returns immediately with "starting" status, creates sandbox in background
    */
@@ -639,7 +596,6 @@ export class SessionAgent implements DurableObject {
 
       await this.saveAndBroadcast();
       await this.updateConvexStatus();
-      await this.scheduleAutoPause();
     } catch (error) {
       this.logError("Sandbox creation failed:", error);
       this.sessionState = {
@@ -1281,8 +1237,8 @@ export class SessionAgent implements DurableObject {
       // Sync assistant message to Convex after completion
       await this.syncMessageToConvex(assistantMessage);
 
-      // Reset auto-pause timer after activity
-      await this.scheduleAutoPause();
+      // Auto-snapshot after message completion
+      await this.handleAutoSnapshot();
     } catch (error) {
       this.logError("OpenCode error:", error);
 
@@ -1310,8 +1266,8 @@ export class SessionAgent implements DurableObject {
       // Sync error message to Convex
       await this.syncMessageToConvex(errorMessage);
 
-      // Reset auto-pause timer even after errors (session still running)
-      await this.scheduleAutoPause();
+      // Optional: snapshot even after errors to preserve partial work
+      // await this.handleAutoSnapshot();
     }
   }
 
@@ -1419,6 +1375,61 @@ export class SessionAgent implements DurableObject {
   }
 
   /**
+   * Auto-snapshot after message completion without terminating sandbox.
+   * Creates a backup of the current filesystem state for later resume.
+   */
+  private async handleAutoSnapshot(): Promise<void> {
+    if (this.sessionState.status !== "running" || !this.sessionState.sandboxId) {
+      this.log("Skipping auto-snapshot - session not running");
+      return;
+    }
+
+    if (this.sessionState.isProcessing) {
+      this.log("Skipping auto-snapshot - still processing");
+      return;
+    }
+
+    this.log("Creating auto-snapshot after message completion...");
+
+    try {
+      const response = await fetch(this.getModalUrl("api-snapshot-sandbox"), {
+        method: "POST",
+        headers: this.getModalHeaders(),
+        body: JSON.stringify({
+          sandbox_id: this.sessionState.sandboxId,
+        }),
+        signal: AbortSignal.timeout(10000), // 10 sec timeout
+      });
+
+      if (!response.ok) {
+        throw new Error(`Modal API error: ${response.statusText}`);
+      }
+
+      const result = (await response.json()) as { snapshot_id?: string; error?: string };
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      if (result.snapshot_id) {
+        // Update snapshot ID but keep status as "running"
+        this.sessionState = {
+          ...this.sessionState,
+          snapshotId: result.snapshot_id,
+          updatedAt: Date.now(),
+        };
+
+        // Persist new snapshot ID to Convex
+        await this.updateConvexStatus();
+        this.log("Auto-snapshot created:", result.snapshot_id);
+      }
+    } catch (error) {
+      // Non-fatal - log but don't block session
+      this.logError("Background snapshot failed (non-fatal):", error);
+    }
+  }
+
+  /**
    * Pause the session by snapshotting the sandbox
    */
   async handlePause(): Promise<void> {
@@ -1433,9 +1444,6 @@ export class SessionAgent implements DurableObject {
         "Cannot pause while processing a prompt. Please wait for completion or stop the session."
       );
     }
-
-    // Cancel auto-pause alarm since we're manually pausing
-    await this.cancelAutoPause();
 
     this.sessionState = {
       ...this.sessionState,
@@ -1477,12 +1485,30 @@ export class SessionAgent implements DurableObject {
       await this.saveAndBroadcast();
       await this.updateConvexStatus();
     } catch (error) {
-      this.sessionState = {
-        ...this.sessionState,
-        status: "error",
-        error: String(error),
-        updatedAt: Date.now(),
-      };
+      const errorMsg = String(error);
+
+      // If sandbox already dead (422 Unprocessable Entity), gracefully handle
+      if (errorMsg.includes("Unprocessable Entity") || errorMsg.includes("422")) {
+        this.log("Sandbox already terminated - using existing snapshot if available");
+
+        // Use existing snapshot or mark as idle
+        this.sessionState = {
+          ...this.sessionState,
+          status: this.sessionState.snapshotId ? "paused" : "idle",
+          sandboxId: null,
+          sandboxUrl: null,
+          opencodeSessionId: null,
+          updatedAt: Date.now(),
+        };
+      } else {
+        // Real error - mark as error status
+        this.sessionState = {
+          ...this.sessionState,
+          status: "error",
+          error: errorMsg,
+          updatedAt: Date.now(),
+        };
+      }
 
       await this.saveAndBroadcast();
       await this.updateConvexStatus();
@@ -1568,7 +1594,6 @@ export class SessionAgent implements DurableObject {
 
       await this.saveAndBroadcast();
       await this.updateConvexStatus();
-      await this.scheduleAutoPause();
     } catch (error) {
       this.sessionState = {
         ...this.sessionState,
@@ -1587,9 +1612,6 @@ export class SessionAgent implements DurableObject {
    * Stop the session completely
    */
   async handleStop(): Promise<void> {
-    // Cancel auto-pause alarm
-    await this.cancelAutoPause();
-
     if (this.sessionState.sandboxId) {
       try {
         await fetch(this.getModalUrl("api-terminate-sandbox"), {

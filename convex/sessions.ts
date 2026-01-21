@@ -161,9 +161,6 @@ export const deleteSession = mutation({
   },
 });
 
-// Modal sandbox timeout (10 minutes) + 1 minute buffer
-const SANDBOX_TIMEOUT_MS = 11 * 60 * 1000;
-
 // Update session status (internal - called by Cloudflare via HTTP action)
 export const updateSessionStatus = internalMutation({
   args: {
@@ -198,22 +195,6 @@ export const updateSessionStatus = internalMutation({
 
     if (args.status !== undefined) {
       updates.status = args.status;
-
-      // Track sandbox expiration for stale session detection
-      if (args.status === "running") {
-        // Sandbox is running - set expiration and schedule timeout check
-        const expiresAt = Date.now() + SANDBOX_TIMEOUT_MS;
-        updates.sandboxExpiresAt = expiresAt;
-
-        // Schedule a check to run when the sandbox should have timed out
-        await ctx.scheduler.runAt(expiresAt, internal.sessions.checkSessionExpired, {
-          sessionId: args.sessionId,
-          expectedExpiresAt: expiresAt,
-        });
-      } else {
-        // Sandbox not running - clear expiration
-        updates.sandboxExpiresAt = undefined;
-      }
     }
 
     if (args.isProcessing !== undefined) updates.isProcessing = args.isProcessing;
@@ -222,37 +203,5 @@ export const updateSessionStatus = internalMutation({
     if (args.errorMessage !== undefined) updates.errorMessage = args.errorMessage;
 
     await ctx.db.patch(session._id, updates);
-  },
-});
-
-// Check if a session has expired (scheduled function)
-export const checkSessionExpired = internalMutation({
-  args: {
-    sessionId: v.string(),
-    expectedExpiresAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const session = await ctx.db
-      .query("codingSessions")
-      .withIndex("by_sessionId", (q) => q.eq("sessionId", args.sessionId))
-      .unique();
-
-    if (!session) {
-      return; // Session was deleted
-    }
-
-    // Only mark as stale if:
-    // 1. Session is still "running"
-    // 2. The sandboxExpiresAt matches what we expected (hasn't been refreshed)
-    if (session.status === "running" && session.sandboxExpiresAt === args.expectedExpiresAt) {
-      const newStatus = session.snapshotId ? "paused" : "idle";
-      await ctx.db.patch(session._id, {
-        status: newStatus,
-        sandboxExpiresAt: undefined,
-        updatedAt: Date.now(),
-      });
-      console.log(`Session ${args.sessionId} expired - marked as ${newStatus}`);
-    }
-    // Otherwise, the session was already properly handled (paused, resumed, etc.)
   },
 });

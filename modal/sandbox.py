@@ -100,13 +100,14 @@ async def create_sandbox(
     print(f"[1/10] Starting sandbox creation for repo: {repo}")
 
     # Create sandbox with tunnel on port 4096
-    # 10 minute timeout - Cloudflare DO will auto-pause before this
+    # 1 hour hard limit, 10 min idle timeout - auto-snapshots after each message
     # Using 1 core + 2GB RAM (sufficient for OpenCode server + git operations)
     print("[2/10] Creating Modal sandbox with encrypted port 4096...")
     sb = modal.Sandbox.create(
         image=sandbox_image,
         app=app,
-        timeout=600,  # 10 minute timeout
+        timeout=3600,        # 1 hour hard limit (safety)
+        idle_timeout=600,    # Kill after 10 min of inactivity
         encrypted_ports=[4096],
         cpu=1.0,
         memory=2048,  # 2GB in MB
@@ -380,6 +381,31 @@ async def pause_sandbox(sandbox_id: str) -> dict:
 
 
 @app.function()
+async def snapshot_only_sandbox(sandbox_id: str) -> dict:
+    """
+    Create filesystem snapshot WITHOUT terminating the sandbox.
+    Used for auto-backup after each AI message.
+
+    Args:
+        sandbox_id: The Modal sandbox ID
+
+    Returns:
+        dict with snapshot_id for later resume, or error if snapshot failed
+    """
+    print(f"[snapshot] Creating snapshot for sandbox: {sandbox_id}")
+    sb = modal.Sandbox.from_id(sandbox_id)
+
+    try:
+        snapshot = sb.snapshot_filesystem()
+        snapshot_id = snapshot.object_id
+        print(f"[snapshot] Snapshot created: {snapshot_id}")
+        return {"snapshot_id": snapshot_id}
+    except Exception as e:
+        print(f"[snapshot] ERROR: Snapshot failed: {e}")
+        return {"error": f"Snapshot failed: {str(e)}"}
+
+
+@app.function()
 async def resume_sandbox(snapshot_id: str) -> dict:
     """
     Resume a sandbox from a filesystem snapshot.
@@ -396,12 +422,13 @@ async def resume_sandbox(snapshot_id: str) -> dict:
     image = modal.Image.from_id(snapshot_id)
 
     # Create new sandbox with restored state
-    # 10 minute timeout - Cloudflare DO will auto-pause before this
+    # 1 hour hard limit, 10 min idle timeout - auto-snapshots after each message
     # Using 1 core + 2GB RAM (same as create_sandbox)
     sb = modal.Sandbox.create(
         image=image,
         app=app,
-        timeout=600,  # 10 minute timeout
+        timeout=3600,        # 1 hour hard limit (safety)
+        idle_timeout=600,    # Kill after 10 min of inactivity
         encrypted_ports=[4096],
         cpu=1.0,
         memory=2048,  # 2GB in MB
@@ -628,6 +655,20 @@ async def api_pause_sandbox(request: Request) -> dict:
         return {"error": "Missing sandbox_id parameter"}
 
     return await pause_sandbox.remote.aio(sandbox_id=sandbox_id)
+
+
+@app.function(image=endpoint_image, secrets=[api_secret])
+@modal.fastapi_endpoint(method="POST")
+async def api_snapshot_sandbox(request: Request) -> dict:
+    """HTTP endpoint to snapshot a sandbox without terminating."""
+    verify_auth(request)
+    body = await request.json()
+    sandbox_id = body.get("sandbox_id")
+
+    if not sandbox_id:
+        return {"error": "Missing sandbox_id parameter"}
+
+    return await snapshot_only_sandbox.remote.aio(sandbox_id=sandbox_id)
 
 
 @app.function(image=endpoint_image, secrets=[api_secret])

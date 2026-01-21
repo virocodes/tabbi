@@ -62,8 +62,6 @@ export default defineSchema({
     isProcessing: v.boolean(),
     snapshotId: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
-    // When the sandbox is expected to timeout (for stale session detection)
-    sandboxExpiresAt: v.optional(v.number()),
     selectedModel: v.optional(v.string()),
     provider: v.optional(
       v.union(v.literal("anthropic"), v.literal("openai"), v.literal("opencode"))

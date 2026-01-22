@@ -1115,6 +1115,7 @@ export class SessionAgent implements DurableObject {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(3 * 60 * 1000), // 3 minute timeout for slow networks
         }
       );
 
@@ -1246,32 +1247,128 @@ export class SessionAgent implements DurableObject {
     } catch (error) {
       this.logError("OpenCode error:", error);
 
-      const errorMessage: Message = {
-        id: crypto.randomUUID(),
-        role: "system",
-        parts: [
-          {
-            type: "text",
-            text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-        timestamp: Date.now(),
-      };
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isTimeoutError =
+        errorMsg.includes("524") ||
+        errorMsg.includes("TimeoutError") ||
+        errorMsg.includes("aborted");
 
-      this.sessionState = {
-        ...this.sessionState,
-        messages: [...this.sessionState.messages, errorMessage],
-        streamingMessage: undefined, // Clear on error
-        isProcessing: false,
-        updatedAt: Date.now(),
-      };
+      // If timeout error, try to fetch final messages (OpenCode might have completed)
+      if (isTimeoutError && this.sessionState.sandboxUrl && this.sessionState.opencodeSessionId) {
+        this.log("Timeout error detected - attempting to fetch final messages from OpenCode");
+        try {
+          const messagesRes = await fetch(
+            `${this.sessionState.sandboxUrl}/session/${this.sessionState.opencodeSessionId}/message`,
+            { signal: AbortSignal.timeout(10000) }
+          );
+
+          if (messagesRes.ok) {
+            const messagesData = (await messagesRes.json()) as {
+              messages: Array<{ role: string; parts: any[] }>;
+            };
+
+            // Find the last assistant message
+            const assistantMessages = messagesData.messages.filter((m) => m.role === "assistant");
+            if (assistantMessages.length > 0) {
+              const lastAssistant = assistantMessages[assistantMessages.length - 1];
+
+              this.log("Retrieved completed message from OpenCode despite timeout");
+
+              // Convert to our message format
+              const completedMessage: Message = {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                parts: lastAssistant.parts,
+                timestamp: Date.now(),
+              };
+
+              this.sessionState = {
+                ...this.sessionState,
+                messages: [...this.sessionState.messages, completedMessage],
+                streamingMessage: undefined,
+                isProcessing: false,
+                updatedAt: Date.now(),
+              };
+
+              await this.saveAndBroadcast();
+              await this.updateConvexStatus();
+              await this.syncMessageToConvex(completedMessage);
+              await this.handleAutoSnapshot();
+
+              // Success - don't show error
+              return;
+            }
+          }
+        } catch (fetchError) {
+          this.log("Failed to fetch final messages:", fetchError);
+          // Continue to error handling below
+        }
+      }
+
+      // If we have streaming content, preserve it instead of clearing
+      const hasStreamingContent =
+        this.sessionState.streamingMessage && this.sessionState.streamingMessage.parts.length > 0;
+
+      if (isTimeoutError && hasStreamingContent) {
+        // Timeout with partial content - keep it and add note
+        const timeoutNote: Message = {
+          id: crypto.randomUUID(),
+          role: "system",
+          parts: [
+            {
+              type: "text",
+              text: "⚠️ Response timed out. Partial content shown above. The AI may still be processing - try refreshing in a moment.",
+            },
+          ],
+          timestamp: Date.now(),
+        };
+
+        this.sessionState = {
+          ...this.sessionState,
+          messages: [
+            ...this.sessionState.messages,
+            this.sessionState.streamingMessage!, // Preserve streaming content
+            timeoutNote,
+          ],
+          streamingMessage: undefined,
+          isProcessing: false,
+          updatedAt: Date.now(),
+        };
+      } else {
+        // Real error or no streaming content - show error
+        const errorMessage: Message = {
+          id: crypto.randomUUID(),
+          role: "system",
+          parts: [
+            {
+              type: "text",
+              text: `Error: ${errorMsg}`,
+            },
+          ],
+          timestamp: Date.now(),
+        };
+
+        this.sessionState = {
+          ...this.sessionState,
+          messages: [...this.sessionState.messages, errorMessage],
+          streamingMessage: undefined, // Clear on real error
+          isProcessing: false,
+          updatedAt: Date.now(),
+        };
+      }
+
       await this.saveAndBroadcast();
       await this.updateConvexStatus();
       // Sync error message to Convex
-      await this.syncMessageToConvex(errorMessage);
+      if (this.sessionState.messages.length > 0) {
+        const lastMessage = this.sessionState.messages[this.sessionState.messages.length - 1];
+        await this.syncMessageToConvex(lastMessage);
+      }
 
-      // Optional: snapshot even after errors to preserve partial work
-      // await this.handleAutoSnapshot();
+      // Snapshot even after errors to preserve partial work
+      if (hasStreamingContent) {
+        await this.handleAutoSnapshot();
+      }
     }
   }
 

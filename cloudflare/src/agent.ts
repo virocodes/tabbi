@@ -799,8 +799,12 @@ export class SessionAgent implements DurableObject {
           throw new Error("Sandbox has timed out. Please start a new session.");
         }
       }
-    } else if (this.sessionState.status === "paused" || this.sessionState.status === "idle") {
-      // Session is paused/idle - try to resume from snapshot
+    } else if (
+      this.sessionState.status === "paused" ||
+      this.sessionState.status === "idle" ||
+      this.sessionState.status === "error"
+    ) {
+      // Session is paused/idle/error - try to resume from snapshot
       if (this.sessionState.snapshotId) {
         this.log("Auto-resuming session from snapshot:", this.sessionState.snapshotId);
         await this.handleResumeInternal();
